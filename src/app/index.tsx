@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, TextInput, Pressable, useColorScheme, Platform, Alert, Dimensions, ScrollView } from 'react-native';
+import { StyleSheet, View, Text, TextInput, Pressable, useColorScheme, Platform, Alert, Dimensions, ScrollView, Keyboard } from 'react-native';
 import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
@@ -154,6 +154,7 @@ export default function HomeScreen() {
   };
 
   // Group Supabase observations into 20x20m grid cells for the heatmap layer
+  // Updated with new thresholds: Light: 3, Moderate: 7, Elevated: 10, Dense: 15+
   const getHeatmapCells = () => {
     const now = new Date().getTime();
     const activeObs = observations.filter(obs => {
@@ -172,27 +173,31 @@ export default function HomeScreen() {
       cells[key].count += 1;
     });
 
-    return Object.values(cells).map(cell => {
-      let color: string = colors.heatmapLight;
-      let label = 'Bebas Asap';
-      if (cell.count === 2) {
-        color = colors.heatmapModerate;
-        label = 'Moderate';
-      } else if (cell.count === 3) {
-        color = colors.heatmapElevated;
-        label = 'Elevated';
-      } else if (cell.count >= 4) {
-        color = colors.heatmapDense;
-        label = 'Dense';
-      }
-      return {
-        latitude: cell.lat,
-        longitude: cell.lng,
-        color,
-        count: cell.count,
-        label,
-      };
-    });
+    return Object.values(cells)
+      .filter(cell => cell.count >= 3) // Only render if count >= 3 (Light threshold)
+      .map(cell => {
+        let color: string = colors.heatmapLight;
+        let label = 'Light';
+        
+        if (cell.count >= 15) {
+          color = colors.heatmapDense;
+          label = 'Dense';
+        } else if (cell.count >= 10) {
+          color = colors.heatmapElevated;
+          label = 'Elevated';
+        } else if (cell.count >= 7) {
+          color = colors.heatmapModerate;
+          label = 'Moderate';
+        }
+        
+        return {
+          latitude: cell.lat,
+          longitude: cell.lng,
+          color,
+          count: cell.count,
+          label,
+        };
+      });
   };
 
   const activeCells = getHeatmapCells();
@@ -200,6 +205,7 @@ export default function HomeScreen() {
   const handleSearchSelect = (loc: typeof MOCK_LOCATIONS[0]) => {
     setSearchQuery(loc.name);
     setIsSearching(false);
+    Keyboard.dismiss();
     
     const targetRegion = {
       latitude: loc.latitude,
@@ -213,6 +219,10 @@ export default function HomeScreen() {
       mapRef.current.animateToRegion(targetRegion, 1000);
     }
   };
+
+  const filteredResults = searchQuery.length === 0
+    ? MOCK_LOCATIONS.slice(0, 3)
+    : MOCK_LOCATIONS.filter(l => l.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
   // 1. Render Onboarding slider overlays if not yet complete
   if (!isOnboarded) {
@@ -284,7 +294,7 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* Floating Header UI */}
+      {/* Floating Header UI — Search occupies full available width (side button removed) */}
       <View style={styles.floatingHeader}>
         {/* Glassmorphic Search Bar Input Trigger */}
         <Pressable
@@ -295,19 +305,6 @@ export default function HomeScreen() {
           <Text style={[styles.searchPlaceholder, { color: colors.textSecondary }]}>
             {searchQuery || "Search location..."}
           </Text>
-        </Pressable>
-
-        {/* Profile Avatar Trigger (MegaPhone / campaign layout ring per Stitch spec) */}
-        <Pressable
-          style={({ pressed }) => [
-            styles.profileButton,
-            { borderColor: colors.secondary },
-            pressed && { transform: [{ scale: 0.95 }] },
-          ]}
-        >
-          <View style={[styles.profileInner, { backgroundColor: colors.backgroundElement }]}>
-            <Icon name="campaign" size={24} themeColor="textSecondary" />
-          </View>
         </Pressable>
       </View>
 
@@ -327,7 +324,7 @@ export default function HomeScreen() {
 
       {/* FLOATING ACTION CONTROLS */}
 
-      {/* Left: SlidersHorizontal Heatmap Legend Trigger */}
+      {/* Left: Guide / Book Open style outline icon (Communicates Legend / Guide / Info) */}
       <Pressable
         onPress={() => setShowLegend(true)}
         style={({ pressed }) => [
@@ -338,10 +335,10 @@ export default function HomeScreen() {
         accessibilityRole="button"
         accessibilityLabel="Show heatmap legend details"
       >
-        <Icon name="filter-list" size={20} themeColor="text" />
+        <Icon name="legend-guide" size={20} themeColor="text" />
       </Pressable>
 
-      {/* Center: Primary Air FAB scan button (Interaction 2) */}
+      {/* Center: Primary Air FAB scan button — Size increased by 15-20% to 76px */}
       <Pressable
         onPress={() => router.push('/air')}
         style={({ pressed }) => [
@@ -352,7 +349,7 @@ export default function HomeScreen() {
         accessibilityRole="button"
         accessibilityLabel="Open smoke scan scanner"
       >
-        <Icon name="air" size={28} color="#ffffff" />
+        <Icon name="air" size={32} color="#ffffff" />
       </Pressable>
 
       {/* Right: GPS locate button */}
@@ -416,16 +413,22 @@ export default function HomeScreen() {
             <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
               {searchQuery.length === 0 ? 'Recent searches' : 'Search results'}
             </Text>
-            {(searchQuery.length === 0 ? MOCK_LOCATIONS.slice(0, 3) : MOCK_LOCATIONS.filter(l => l.name.toLowerCase().includes(searchQuery.toLowerCase()))).map((loc, idx) => (
-              <Pressable
-                key={idx}
-                onPress={() => handleSearchSelect(loc)}
-                style={[styles.searchResultRow, { borderBottomColor: colors.border }]}
-              >
-                <Icon name="map-pin" size={20} themeColor="textSecondary" />
-                <Text style={[styles.searchResultText, { color: colors.text }]}>{loc.name}</Text>
-              </Pressable>
-            ))}
+            {filteredResults.length === 0 ? (
+              <View style={styles.noResultsContainer}>
+                <Text style={[styles.noResultsText, { color: colors.textSecondary }]}>No location found</Text>
+              </View>
+            ) : (
+              filteredResults.map((loc, idx) => (
+                <Pressable
+                  key={idx}
+                  onPress={() => handleSearchSelect(loc)}
+                  style={[styles.searchResultRow, { borderBottomColor: colors.border }]}
+                >
+                  <Icon name="map-pin" size={20} themeColor="textSecondary" />
+                  <Text style={[styles.searchResultText, { color: colors.text }]}>{loc.name}</Text>
+                </Pressable>
+              ))
+            )}
           </ScrollView>
         </View>
       )}
@@ -444,19 +447,19 @@ export default function HomeScreen() {
               </View>
               <View style={styles.legendSwatchRow}>
                 <View style={[styles.swatch, { backgroundColor: colors.heatmapLight }]} />
-                <Text style={[styles.legendLabel, { color: colors.text }]}>Light (1 report)</Text>
+                <Text style={[styles.legendLabel, { color: colors.text }]}>Light (3 observations)</Text>
               </View>
               <View style={styles.legendSwatchRow}>
                 <View style={[styles.swatch, { backgroundColor: colors.heatmapModerate }]} />
-                <Text style={[styles.legendLabel, { color: colors.text }]}>Moderate (2 reports)</Text>
+                <Text style={[styles.legendLabel, { color: colors.text }]}>Moderate (7 observations)</Text>
               </View>
               <View style={styles.legendSwatchRow}>
                 <View style={[styles.swatch, { backgroundColor: colors.heatmapElevated }]} />
-                <Text style={[styles.legendLabel, { color: colors.text }]}>Elevated (3 reports)</Text>
+                <Text style={[styles.legendLabel, { color: colors.text }]}>Elevated (10 observations)</Text>
               </View>
               <View style={styles.legendSwatchRow}>
                 <View style={[styles.swatch, { backgroundColor: colors.heatmapDense }]} />
-                <Text style={[styles.legendLabel, { color: colors.text }]}>Dense (4+ reports)</Text>
+                <Text style={[styles.legendLabel, { color: colors.text }]}>Dense (15+ observations)</Text>
               </View>
             </View>
 
@@ -504,7 +507,6 @@ const styles = StyleSheet.create({
     right: Spacing.four,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.three,
     zIndex: 20,
   },
   searchBar: {
@@ -525,21 +527,6 @@ const styles = StyleSheet.create({
   searchPlaceholder: {
     fontFamily: Fonts.sans,
     fontSize: Typography.body.fontSize,
-  },
-  profileButton: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.full,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  profileInner: {
-    width: '100%',
-    height: '100%',
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   heatmapCircle: {
     position: 'absolute',
@@ -620,10 +607,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 28,
     left: '50%',
-    marginLeft: -32,
-    width: 64,
-    height: 64,
-    borderRadius: Radius.full,
+    marginLeft: -38,
+    width: 76,
+    height: 76,
+    borderRadius: 38,
     borderWidth: 3,
     alignItems: 'center',
     justifyContent: 'center',
@@ -718,6 +705,15 @@ const styles = StyleSheet.create({
   searchResultText: {
     fontFamily: Fonts.sans,
     fontSize: Typography.bodyLg.fontSize,
+  },
+  noResultsContainer: {
+    paddingVertical: Spacing.eight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noResultsText: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.body.fontSize,
   },
   legendBackdrop: {
     ...StyleSheet.absoluteFillObject,

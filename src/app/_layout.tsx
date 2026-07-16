@@ -14,7 +14,13 @@ export default function RootLayout() {
       <AnimatedSplashOverlay />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
-        <Stack.Screen name="air" />
+        <Stack.Screen 
+          name="air" 
+          options={{
+            animation: 'fade',
+            animationDuration: 400,
+          }}
+        />
       </Stack>
     </ThemeProvider>
   );

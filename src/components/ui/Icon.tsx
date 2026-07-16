@@ -20,7 +20,8 @@ export type IconName =
   | 'check'
   | 'check-circle'
   | 'filter-list'
-  | 'map-pin';
+  | 'map-pin'
+  | 'legend-guide';
 
 interface IconProps {
   name: IconName;
@@ -48,6 +49,7 @@ const iconMap: Record<IconName, keyof typeof MaterialIcons.glyphMap> = {
   'check-circle': 'check-circle',
   'filter-list': 'filter-list',
   'map-pin': 'place',
+  'legend-guide': 'menu-book',
 };
 
 export function Icon({ name, size = 24, color, themeColor }: IconProps) {
