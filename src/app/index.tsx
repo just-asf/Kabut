@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, TextInput, Pressable, useColorScheme, Platform, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, View, Text, TextInput, Pressable, useColorScheme, Platform, Alert, Dimensions, ScrollView } from 'react-native';
 import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
@@ -8,10 +8,33 @@ import { Colors, Radius, Spacing, Typography, Fonts } from '@/constants/theme';
 import { OnboardingOverlay } from '@/components/layout/OnboardingOverlay';
 import { ReportConfirmModal } from '@/components/layout/ReportConfirmModal';
 import { Icon } from '@/components/ui/Icon';
+import { Button } from '@/components/ui/Button';
 import { useAppStore } from '@/store/useAppStore';
+
+// Conditional import of react-native-maps for native platforms
+let MapView: any = null;
+let MapCircle: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    const Maps = require('react-native-maps');
+    MapView = Maps.default;
+    MapCircle = Maps.Circle;
+  } catch (err) {
+    console.warn('Failed to load react-native-maps:', err);
+  }
+}
 
 const ONBOARDING_STORAGE_KEY = 'KABUT_ONBOARDING_COMPLETED';
 const JAKARTA_CENTER = { latitude: -6.2088, longitude: 106.8456 };
+
+const MOCK_LOCATIONS = [
+  { name: 'Jakarta Central', latitude: -6.2088, longitude: 106.8456 },
+  { name: 'Sudirman Business District', latitude: -6.2196, longitude: 106.8166 },
+  { name: 'Kemang Entertainment Area', latitude: -6.2736, longitude: 106.8206 },
+  { name: 'Kuningan Office Complex', latitude: -6.2244, longitude: 106.8294 },
+  { name: 'Menteng Residential Park', latitude: -6.2012, longitude: 106.8322 },
+  { name: 'Senayan Sports Plaza', latitude: -6.2225, longitude: 106.7997 }
+];
 
 export default function HomeScreen() {
   const scheme = useColorScheme();
@@ -25,12 +48,25 @@ export default function HomeScreen() {
     fetchObservations,
     location,
     setLocation,
-    locationError,
     setLocationError,
   } = useAppStore();
 
+  const mapRef = useRef<any>(null);
+  const searchInputRef = useRef<TextInput>(null);
+
   const [showReportConfirm, setShowReportConfirm] = useState(false);
   const [reporting, setReporting] = useState(false);
+  const [showEmptyState, setShowEmptyState] = useState(true);
+  const [showLegend, setShowLegend] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const [mapRegion, setMapRegion] = useState({
+    latitude: JAKARTA_CENTER.latitude,
+    longitude: JAKARTA_CENTER.longitude,
+    latitudeDelta: 0.015,
+    longitudeDelta: 0.015,
+  });
 
   // Load onboarding state from storage
   useEffect(() => {
@@ -60,6 +96,18 @@ export default function HomeScreen() {
       });
       setLocation(loc);
       setLocationError(null);
+
+      // Pan map camera to user location
+      const region = {
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+        latitudeDelta: 0.012,
+        longitudeDelta: 0.012,
+      };
+      setMapRegion(region);
+      if (Platform.OS !== 'web' && mapRef.current) {
+        mapRef.current.animateToRegion(region, 1000);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setLocationError(msg);
@@ -84,10 +132,6 @@ export default function HomeScreen() {
     }
   };
 
-  const handleFABPress = () => {
-    setShowReportConfirm(true);
-  };
-
   // Interaction 1: Observe FAB Confirmation Modal (closes modal, nothing else)
   const handleConfirmReport = () => {
     setReporting(true);
@@ -102,16 +146,72 @@ export default function HomeScreen() {
     }, 800);
   };
 
-  const handleProfilePress = () => {
-    router.push('/supabase-test');
+  // Helper projection to map GPS coordinates to screen pixel offsets for Web mockup map
+  const getCoordinateOffset = (lat: number, lng: number) => {
+    const y = 300 - (lat - mapRegion.latitude) * 3500;
+    const x = 180 + (lng - mapRegion.longitude) * 3500;
+    return { x, y };
   };
 
-  // Helper projection to map GPS coordinates to screen pixel offsets
-  const getCoordinateOffset = (lat: number, lng: number) => {
-    // Map center is at x=180, y=300
-    const y = 300 - (lat - JAKARTA_CENTER.latitude) * 3500;
-    const x = 180 + (lng - JAKARTA_CENTER.longitude) * 3500;
-    return { x, y };
+  // Group Supabase observations into 20x20m grid cells for the heatmap layer
+  const getHeatmapCells = () => {
+    const now = new Date().getTime();
+    const activeObs = observations.filter(obs => {
+      const ageMs = now - new Date(obs.created_at).getTime();
+      return ageMs < 60 * 60 * 1000; // 60 minutes time-decay
+    });
+
+    const cells: { [key: string]: { lat: number; lng: number; count: number } } = {};
+    activeObs.forEach(obs => {
+      const cellLat = Math.round(obs.latitude / 0.0002) * 0.0002;
+      const cellLng = Math.round(obs.longitude / 0.0002) * 0.0002;
+      const key = `${cellLat.toFixed(5)},${cellLng.toFixed(5)}`;
+      if (!cells[key]) {
+        cells[key] = { lat: cellLat, lng: cellLng, count: 0 };
+      }
+      cells[key].count += 1;
+    });
+
+    return Object.values(cells).map(cell => {
+      let color: string = colors.heatmapLight;
+      let label = 'Bebas Asap';
+      if (cell.count === 2) {
+        color = colors.heatmapModerate;
+        label = 'Moderate';
+      } else if (cell.count === 3) {
+        color = colors.heatmapElevated;
+        label = 'Elevated';
+      } else if (cell.count >= 4) {
+        color = colors.heatmapDense;
+        label = 'Dense';
+      }
+      return {
+        latitude: cell.lat,
+        longitude: cell.lng,
+        color,
+        count: cell.count,
+        label,
+      };
+    });
+  };
+
+  const activeCells = getHeatmapCells();
+
+  const handleSearchSelect = (loc: typeof MOCK_LOCATIONS[0]) => {
+    setSearchQuery(loc.name);
+    setIsSearching(false);
+    
+    const targetRegion = {
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      latitudeDelta: 0.012,
+      longitudeDelta: 0.012,
+    };
+    setMapRegion(targetRegion);
+
+    if (Platform.OS !== 'web' && mapRef.current) {
+      mapRef.current.animateToRegion(targetRegion, 1000);
+    }
   };
 
   // 1. Render Onboarding slider overlays if not yet complete
@@ -122,108 +222,88 @@ export default function HomeScreen() {
   // 2. Render Main Map dashboard view once onboarded
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Base Map Image Layer */}
-      <Image
-        source="https://lh3.googleusercontent.com/aida-public/AB6AXuDUR3fVXmY8YxF-SaNI3wjHICuOE80xxqNE1I33BZDhMPUj8ueMvZ9eX1b26kpfXhVZAQpJ0pN63hNW1Ase4PQ4V_sEI23lv0wNyCCnw0XZ_L-hxX-TgDGtYr1rfJvWx1q7U8WMPZTZZBv2b0W4o6U_hMGxNfvl5--hwb2FJIHwefw1WuRrnipVGTavuCwkAoz8ViA87lUTLOrLQ9BfsRpFkeP0z-Wzl9zDZDkL9j24YJcAbbIKOyzSZn0c7W_bOBKbe4UcZr5w2fw6"
-        style={styles.mapImage}
-        contentFit="cover"
-        accessible={true}
-        accessibilityLabel="Indonesian city map detailing live secondhand smoke air quality index zones."
-      />
-      <View style={styles.mapOverlay} />
-
-      {/* Floating Map Indicators (Simulating live heatmap zones) */}
       
-      {/* Sedang (Moderate - Yellow) */}
-      <View 
-        style={[styles.heatmapCircle, { top: 220, left: 40, backgroundColor: colors.heatmapModerate + '33', borderColor: colors.heatmapModerate }]}
-        accessible={true}
-        accessibilityLabel="Moderate secondhand smoke hazard zone."
-      >
-        <Icon name="warning" size={32} color={colors.tertiary} />
-        <View style={[styles.badge, { backgroundColor: colors.backgroundElement }]}>
-          <Text style={[styles.badgeText, { color: colors.tertiary }]}>Sedang</Text>
-        </View>
-      </View>
-
-      {/* Bahaya (Dense - Red) */}
-      <View 
-        style={[styles.heatmapCircle, { top: 430, left: 160, backgroundColor: colors.heatmapDense + '33', borderColor: colors.heatmapDense }]}
-        accessible={true}
-        accessibilityLabel="Danger secondhand smoke hazard zone."
-      >
-        <Icon name="report-problem" size={32} color={colors.danger} />
-        <View style={[styles.badge, { backgroundColor: colors.backgroundElement }]}>
-          <Text style={[styles.badgeText, { color: colors.danger }]}>Bahaya</Text>
-        </View>
-      </View>
-
-      {/* Ekstrim (Extreme - Black/Inverse) */}
-      <View 
-        style={[styles.heatmapCircle, { top: 300, right: 30, backgroundColor: 'rgba(28,31,22,0.4)', borderColor: colors.text }]}
-        accessible={true}
-        accessibilityLabel="Extreme secondhand smoke hazard zone."
-      >
-        <Icon name="block" size={32} color="#ffffff" />
-        <View style={[styles.badge, { backgroundColor: colors.text }]}>
-          <Text style={[styles.badgeText, { color: colors.background }]}>Ekstrim</Text>
-        </View>
-      </View>
-
-      {/* Render live reported smoke-free observations dynamically */}
-      {observations.map((obs, idx) => {
-        const pos = getCoordinateOffset(obs.latitude, obs.longitude);
-        // Bounds checking
-        if (pos.x < 0 || pos.x > 380 || pos.y < 50 || pos.y > 600) return null;
-        
-        return (
-          <View
-            key={obs.id || idx}
-            style={[
-              styles.heatmapCircle,
-              { 
-                top: pos.y - 75,
-                left: pos.x - 75,
-                backgroundColor: colors.heatmapLight + '33',
-                borderColor: colors.heatmapLight
-              }
-            ]}
+      {/* Interactive Map Layout */}
+      {Platform.OS !== 'web' && MapView ? (
+        <MapView
+          ref={mapRef}
+          style={StyleSheet.absoluteFillObject}
+          initialRegion={mapRegion}
+          showsUserLocation={true}
+          showsMyLocationButton={false}
+          onRegionChangeComplete={(r: any) => setMapRegion(r)}
+        >
+          {/* Heatmap Grid Layer Circles */}
+          {activeCells.map((cell, idx) => (
+            <MapCircle
+              key={idx}
+              center={{ latitude: cell.latitude, longitude: cell.longitude }}
+              radius={15}
+              fillColor={cell.color + '44'}
+              strokeColor={cell.color}
+              strokeWidth={2}
+            />
+          ))}
+        </MapView>
+      ) : (
+        // Web Platform Fallback stylized map
+        <View style={StyleSheet.absoluteFillObject}>
+          <Image
+            source="https://lh3.googleusercontent.com/aida-public/AB6AXuDUR3fVXmY8YxF-SaNI3wjHICuOE80xxqNE1I33BZDhMPUj8ueMvZ9eX1b26kpfXhVZAQpJ0pN63hNW1Ase4PQ4V_sEI23lv0wNyCCnw0XZ_L-hxX-TgDGtYr1rfJvWx1q7U8WMPZTZZBv2b0W4o6U_hMGxNfvl5--hwb2FJIHwefw1WuRrnipVGTavuCwkAoz8ViA87lUTLOrLQ9BfsRpFkeP0z-Wzl9zDZDkL9j24YJcAbbIKOyzSZn0c7W_bOBKbe4UcZr5w2fw6"
+            style={styles.mapImage}
+            contentFit="cover"
             accessible={true}
-            accessibilityLabel="Geolocated smoke-free reported zone."
-          >
-            <Icon name="check" size={32} color={colors.primary} />
-            <View style={[styles.badge, { backgroundColor: colors.backgroundElement }]}>
-              <Text style={[styles.badgeText, { color: colors.primary }]}>Bebas Asap</Text>
-            </View>
-          </View>
-        );
-      })}
+            accessibilityLabel="Jakarta city map detailing live secondhand smoke air quality index zones."
+          />
+          <View style={styles.mapOverlay} />
+          
+          {/* Render Web Heatmap overlay items using offsets */}
+          {activeCells.map((cell, idx) => {
+            const pos = getCoordinateOffset(cell.latitude, cell.longitude);
+            if (pos.x < 0 || pos.x > 380 || pos.y < 50 || pos.y > 600) return null;
+            return (
+              <View
+                key={idx}
+                style={[
+                  styles.heatmapCircle,
+                  {
+                    top: pos.y - 75,
+                    left: pos.x - 75,
+                    backgroundColor: cell.color + '33',
+                    borderColor: cell.color,
+                  }
+                ]}
+              >
+                <Icon name="air" size={32} color={cell.color} />
+                <View style={[styles.badge, { backgroundColor: colors.backgroundElement }]}>
+                  <Text style={[styles.badgeText, { color: cell.color }]}>{cell.label}</Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
 
       {/* Floating Header UI */}
       <View style={styles.floatingHeader}>
-        {/* Glassmorphic Search Bar */}
-        <View style={[styles.searchBar, { backgroundColor: activeScheme === 'dark' ? 'rgba(27,31,22,0.8)' : 'rgba(255,255,255,0.8)', borderColor: colors.border }]}>
-          <Icon name="search" size={20} themeColor="primary" />
-          <TextInput
-            placeholder={location ? `Near ${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}` : "Search location"}
-            placeholderTextColor={colors.textSecondary}
-            style={[styles.searchInput, { color: colors.text }]}
-            accessibilityRole="search"
-            accessibilityLabel="Search locations input field"
-            editable={false}
-          />
-        </View>
-
-        {/* Profile / Settings Button (Triggers supabase connection test) */}
+        {/* Glassmorphic Search Bar Input Trigger */}
         <Pressable
-          onPress={handleProfilePress}
+          onPress={() => setIsSearching(true)}
+          style={[styles.searchBar, { backgroundColor: activeScheme === 'dark' ? 'rgba(27,31,22,0.8)' : 'rgba(255,255,255,0.8)', borderColor: colors.border }]}
+        >
+          <Icon name="search" size={20} themeColor="primary" />
+          <Text style={[styles.searchPlaceholder, { color: colors.textSecondary }]}>
+            {searchQuery || "Search location..."}
+          </Text>
+        </Pressable>
+
+        {/* Profile Avatar Trigger (MegaPhone / campaign layout ring per Stitch spec) */}
+        <Pressable
           style={({ pressed }) => [
             styles.profileButton,
             { borderColor: colors.secondary },
             pressed && { transform: [{ scale: 0.95 }] },
           ]}
-          accessibilityRole="button"
-          accessibilityLabel="Open settings and connection test diagnostics screen"
         >
           <View style={[styles.profileInner, { backgroundColor: colors.backgroundElement }]}>
             <Icon name="campaign" size={24} themeColor="textSecondary" />
@@ -231,7 +311,51 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
-      {/* Floating GPS Button */}
+      {/* Empty State Card Overlay */}
+      {activeCells.length === 0 && showEmptyState && (
+        <View style={[styles.emptyStateCard, { backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
+          <Icon name="check-circle" size={24} color={colors.primary} />
+          <View style={styles.emptyStateTextWrapper}>
+            <Text style={[styles.emptyStateTitle, { color: colors.text }]}>No reports nearby</Text>
+            <Text style={[styles.emptyStateDesc, { color: colors.textSecondary }]}>Air looks clear.</Text>
+          </View>
+          <Pressable onPress={() => setShowEmptyState(false)} style={styles.emptyStateClose}>
+            <Icon name="close" size={16} themeColor="textSecondary" />
+          </Pressable>
+        </View>
+      )}
+
+      {/* FLOATING ACTION CONTROLS */}
+
+      {/* Left: SlidersHorizontal Heatmap Legend Trigger */}
+      <Pressable
+        onPress={() => setShowLegend(true)}
+        style={({ pressed }) => [
+          styles.legendButton,
+          { backgroundColor: activeScheme === 'dark' ? 'rgba(27,31,22,0.8)' : 'rgba(255,255,255,0.8)', borderColor: colors.border },
+          pressed && { opacity: 0.7 }
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel="Show heatmap legend details"
+      >
+        <Icon name="filter-list" size={20} themeColor="text" />
+      </Pressable>
+
+      {/* Center: Primary Air FAB scan button (Interaction 2) */}
+      <Pressable
+        onPress={() => router.push('/air')}
+        style={({ pressed }) => [
+          styles.airFab,
+          { backgroundColor: colors.primary, borderColor: colors.backgroundElement },
+          pressed && { transform: [{ scale: 0.95 }] }
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel="Open smoke scan scanner"
+      >
+        <Icon name="air" size={28} color="#ffffff" />
+      </Pressable>
+
+      {/* Right: GPS locate button */}
       <Pressable
         onPress={requestLocation}
         style={({ pressed }) => [
@@ -240,62 +364,115 @@ export default function HomeScreen() {
           pressed && { opacity: 0.7 }
         ]}
         accessibilityRole="button"
-        accessibilityLabel="Refresh current GPS location"
+        accessibilityLabel="Locate user location"
       >
         <Icon name="my-location" size={24} themeColor="text" />
       </Pressable>
 
-      {/* Observe Button (FAB) (Interaction 1 - Confirmation Modal) */}
+      {/* Right-Above: Observe FAB (Interaction 1 - Confirmation Modal) */}
       <Pressable
-        onPress={handleFABPress}
+        onPress={() => setShowReportConfirm(true)}
         style={({ pressed }) => [
-          styles.fab,
+          styles.observeFab,
           { backgroundColor: colors.primary },
           pressed && { transform: [{ scale: 0.95 }] },
         ]}
         accessibilityRole="button"
-        accessibilityLabel="Confirm observe action dialog"
+        accessibilityLabel="Open observe smoke confirmation"
       >
-        <Icon name="warning" size={28} color="#ffffff" />
+        <Icon name="warning" size={24} color="#ffffff" />
       </Pressable>
 
-      {/* Bottom Navigation Bar */}
-      <View style={[styles.bottomNav, { backgroundColor: colors.backgroundElement, borderTopColor: colors.border }]}>
-        {/* Home Tab */}
-        <Pressable 
-          style={styles.navItem} 
-          accessibilityRole="button" 
-          accessibilityLabel="Home Map screen active"
-        >
-          <Icon name="home" size={24} color={colors.primary} />
-        </Pressable>
+      {/* Full-Screen Search View Overlay */}
+      {isSearching && (
+        <View style={[styles.searchOverlay, { backgroundColor: colors.background }]}>
+          <View style={styles.searchHeader}>
+            <Pressable 
+              onPress={() => setIsSearching(false)}
+              style={styles.backButton}
+            >
+              <Icon name="arrow-back" size={24} themeColor="text" />
+            </Pressable>
+            <View style={[styles.searchBarActive, { backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
+              <Icon name="search" size={20} themeColor="primary" />
+              <TextInput
+                ref={searchInputRef}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search location..."
+                placeholderTextColor={colors.textSecondary}
+                style={[styles.searchInputActive, { color: colors.text }]}
+                autoFocus={true}
+              />
+              {searchQuery.length > 0 && (
+                <Pressable onPress={() => setSearchQuery('')}>
+                  <Icon name="close" size={20} themeColor="textSecondary" />
+                </Pressable>
+              )}
+            </View>
+          </View>
 
-        {/* Center Floating Air Button (Interaction 2 - scan flow) */}
-        <Pressable
-          onPress={() => router.push('/air')}
-          style={({ pressed }) => [
-            styles.navItem,
-            pressed && { transform: [{ scale: 0.96 }] }
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="Open Air report observation scanner"
-        >
-          <Icon name="air" size={24} color={colors.textSecondary} />
-        </Pressable>
+          <ScrollView style={styles.searchResultsContainer}>
+            <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+              {searchQuery.length === 0 ? 'Recent searches' : 'Search results'}
+            </Text>
+            {(searchQuery.length === 0 ? MOCK_LOCATIONS.slice(0, 3) : MOCK_LOCATIONS.filter(l => l.name.toLowerCase().includes(searchQuery.toLowerCase()))).map((loc, idx) => (
+              <Pressable
+                key={idx}
+                onPress={() => handleSearchSelect(loc)}
+                style={[styles.searchResultRow, { borderBottomColor: colors.border }]}
+              >
+                <Icon name="map-pin" size={20} themeColor="textSecondary" />
+                <Text style={[styles.searchResultText, { color: colors.text }]}>{loc.name}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
-        {/* Database Test Tab */}
-        <Pressable
-          onPress={handleProfilePress}
-          style={({ pressed }) => [
-            styles.navItem,
-            pressed && { opacity: 0.7 }
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="Database connection diagnostics screen"
-        >
-          <Icon name="person" size={24} color={colors.textSecondary} />
-        </Pressable>
-      </View>
+      {/* Legend Modal Dialog */}
+      {showLegend && (
+        <View style={styles.legendBackdrop}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setShowLegend(false)} />
+          <View style={[styles.legendCard, { backgroundColor: colors.backgroundElement }]}>
+            <Text style={[styles.legendTitle, { color: colors.text }]}>Map legend</Text>
+            
+            <View style={styles.legendSwatches}>
+              <View style={styles.legendSwatchRow}>
+                <View style={[styles.swatch, { backgroundColor: '#E4E5DE' }]} />
+                <Text style={[styles.legendLabel, { color: colors.text }]}>Clean (no observations)</Text>
+              </View>
+              <View style={styles.legendSwatchRow}>
+                <View style={[styles.swatch, { backgroundColor: colors.heatmapLight }]} />
+                <Text style={[styles.legendLabel, { color: colors.text }]}>Light (1 report)</Text>
+              </View>
+              <View style={styles.legendSwatchRow}>
+                <View style={[styles.swatch, { backgroundColor: colors.heatmapModerate }]} />
+                <Text style={[styles.legendLabel, { color: colors.text }]}>Moderate (2 reports)</Text>
+              </View>
+              <View style={styles.legendSwatchRow}>
+                <View style={[styles.swatch, { backgroundColor: colors.heatmapElevated }]} />
+                <Text style={[styles.legendLabel, { color: colors.text }]}>Elevated (3 reports)</Text>
+              </View>
+              <View style={styles.legendSwatchRow}>
+                <View style={[styles.swatch, { backgroundColor: colors.heatmapDense }]} />
+                <Text style={[styles.legendLabel, { color: colors.text }]}>Dense (4+ reports)</Text>
+              </View>
+            </View>
+
+            <Text style={[styles.legendDesc, { color: colors.textSecondary }]}>
+              Observations expire automatically within 60 minutes, so the map always reflects current conditions.
+            </Text>
+
+            <Button
+              label="Close"
+              onPress={() => setShowLegend(false)}
+              variant="filled"
+              style={{ borderRadius: Radius.full, marginTop: Spacing.four }}
+            />
+          </View>
+        </View>
+      )}
 
       {/* Observe confirmation modal */}
       <ReportConfirmModal
@@ -345,9 +522,7 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 4,
   },
-  searchInput: {
-    flex: 1,
-    height: '100%',
+  searchPlaceholder: {
     fontFamily: Fonts.sans,
     fontSize: Typography.body.fontSize,
   },
@@ -391,10 +566,78 @@ const styles = StyleSheet.create({
     fontSize: Typography.caption.fontSize,
     fontWeight: '700',
   },
+  emptyStateCard: {
+    position: 'absolute',
+    top: 120,
+    left: Spacing.four,
+    right: Spacing.four,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    padding: Spacing.four,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+    zIndex: 15,
+  },
+  emptyStateTextWrapper: {
+    flex: 1,
+    marginLeft: Spacing.three,
+  },
+  emptyStateTitle: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.body.fontSize,
+    fontWeight: '700',
+  },
+  emptyStateDesc: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.caption.fontSize,
+  },
+  emptyStateClose: {
+    padding: Spacing.one,
+  },
+  legendButton: {
+    position: 'absolute',
+    left: Spacing.four,
+    bottom: 28,
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+    zIndex: 10,
+  },
+  airFab: {
+    position: 'absolute',
+    bottom: 28,
+    left: '50%',
+    marginLeft: -32,
+    width: 64,
+    height: 64,
+    borderRadius: Radius.full,
+    borderWidth: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    elevation: 8,
+    zIndex: 10,
+  },
   gpsButton: {
     position: 'absolute',
     right: Spacing.four,
-    bottom: 110,
+    bottom: 28,
     width: 48,
     height: 48,
     borderRadius: Radius.full,
@@ -408,40 +651,121 @@ const styles = StyleSheet.create({
     elevation: 3,
     zIndex: 10,
   },
-  fab: {
+  observeFab: {
     position: 'absolute',
-    bottom: 110,
-    left: '50%',
-    marginLeft: -32,
-    width: 64,
-    height: 64,
+    right: Spacing.four,
+    bottom: 92,
+    width: 48,
+    height: 48,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
+    zIndex: 10,
+  },
+  searchOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 100,
+    paddingTop: 50,
+    paddingHorizontal: Spacing.four,
+  },
+  searchHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    marginBottom: Spacing.four,
+  },
+  backButton: {
+    padding: Spacing.two,
+  },
+  searchBarActive: {
+    flex: 1,
+    height: 48,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.four,
+    gap: Spacing.two,
+  },
+  searchInputActive: {
+    flex: 1,
+    height: '100%',
+    fontFamily: Fonts.sans,
+    fontSize: Typography.bodyLg.fontSize,
+  },
+  searchResultsContainer: {
+    flex: 1,
+  },
+  sectionTitle: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.caption.fontSize,
+    fontWeight: '700',
+    marginBottom: Spacing.three,
+    textTransform: 'uppercase',
+  },
+  searchResultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: Spacing.four,
+    borderBottomWidth: 1,
+    gap: Spacing.three,
+  },
+  searchResultText: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.bodyLg.fontSize,
+  },
+  legendBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(28,31,22,0.4)',
+    zIndex: 110,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.four,
+  },
+  legendCard: {
+    width: 320,
+    borderRadius: Radius.md,
+    padding: Spacing.five,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.15,
     shadowRadius: 24,
     elevation: 8,
-    zIndex: 10,
   },
-  bottomNav: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 72,
+  legendTitle: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.h2.fontSize,
+    fontWeight: Typography.h2.fontWeight,
+    marginBottom: Spacing.four,
+    textAlign: 'center',
+  },
+  legendSwatches: {
+    gap: Spacing.three,
+    marginBottom: Spacing.four,
+  },
+  legendSwatchRow: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
     alignItems: 'center',
-    borderTopWidth: 1,
-    paddingBottom: Spacing.two,
-    zIndex: 10,
+    gap: Spacing.three,
   },
-  navItem: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    height: '100%',
+  swatch: {
+    width: 24,
+    height: 24,
+    borderRadius: Radius.xs,
+  },
+  legendLabel: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.body.fontSize,
+  },
+  legendDesc: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.caption.fontSize,
+    lineHeight: Typography.body.lineHeight,
+    textAlign: 'center',
   },
 });
