@@ -9,7 +9,7 @@ BEGIN
   ON CONFLICT (grid_id) DO UPDATE
   SET active_reports = grid_status.active_reports + 1,
       -- grid_status.clean_votes = nilai LAMA, aman karena tidak berubah di flow ini
-      score = (grid_status.active_reports + 1) - (grid_status.clean_votes * 0.7),
+      score = GREATEST((grid_status.active_reports + 1) - (grid_status.clean_votes * 0.7), 0),
       last_updated = now();
 END;
 $$ LANGUAGE plpgsql;
@@ -45,7 +45,10 @@ BEGIN
   WHERE g.grid_id = sub.grid_id;
 
   UPDATE grid_status
-  SET active_reports = 0, score = 0, last_updated = now()
+  SET active_reports = 0, clean_votes = 0, score = 0, last_updated = now()
+  WHERE grid_id NOT IN (SELECT DISTINCT grid_id FROM observations);
+
+  DELETE FROM clean_votes 
   WHERE grid_id NOT IN (SELECT DISTINCT grid_id FROM observations);
 END;
 $$ LANGUAGE plpgsql;
