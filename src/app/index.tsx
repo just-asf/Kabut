@@ -5,30 +5,34 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import * as Location from 'expo-location';
 import { Colors, Radius, Spacing, Typography, Fonts } from '@/constants/theme';
-import { SplashOverlay } from '@/components/layout/SplashOverlay';
 import { OnboardingOverlay } from '@/components/layout/OnboardingOverlay';
 import { ReportConfirmModal } from '@/components/layout/ReportConfirmModal';
 import { Icon } from '@/components/ui/Icon';
+import { useAppStore } from '@/store/useAppStore';
 
 const ONBOARDING_STORAGE_KEY = 'KABUT_ONBOARDING_COMPLETED';
+const JAKARTA_CENTER = { latitude: -6.2088, longitude: 106.8456 };
 
 export default function HomeScreen() {
   const scheme = useColorScheme();
   const activeScheme = scheme === 'dark' ? 'dark' : 'light';
   const colors = Colors[activeScheme];
 
-  const [showSplash, setShowSplash] = useState(true);
-  const [isOnboarded, setIsOnboarded] = useState(false);
+  const {
+    isOnboarded,
+    setIsOnboarded,
+    observations,
+    fetchObservations,
+    location,
+    setLocation,
+    locationError,
+    setLocationError,
+  } = useAppStore();
+
   const [showReportConfirm, setShowReportConfirm] = useState(false);
-  
-  // GPS Location States
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [locationError, setLocationError] = useState<string | null>(null);
-  
-  // Reporting Throttling State
   const [reporting, setReporting] = useState(false);
 
-  // Check if user has completed onboarding previously
+  // Load onboarding state from storage
   useEffect(() => {
     async function loadOnboardingState() {
       try {
@@ -41,33 +45,35 @@ export default function HomeScreen() {
       }
     }
     loadOnboardingState();
-  }, []);
+  }, [setIsOnboarded]);
 
-  // Fetch real coordinates upon onboarding completion
+  // Request location updates
+  const requestLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setLocationError('Location permission denied');
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      setLocation(loc);
+      setLocationError(null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setLocationError(msg);
+      console.warn('Failed to fetch location:', msg);
+    }
+  };
+
+  // Fetch observations and location upon onboarding completion
   useEffect(() => {
     if (isOnboarded) {
-      async function requestLocation() {
-        try {
-          const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status !== 'granted') {
-            setLocationError('Location permission denied');
-            return;
-          }
-          const loc = await Location.getCurrentPositionAsync({});
-          setLocation(loc);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          setLocationError(msg);
-          console.warn('Failed to fetch location:', msg);
-        }
-      }
+      fetchObservations();
       requestLocation();
     }
   }, [isOnboarded]);
-
-  const handleSplashComplete = () => {
-    setShowSplash(false);
-  };
 
   const handleOnboardingComplete = async () => {
     try {
@@ -82,38 +88,38 @@ export default function HomeScreen() {
     setShowReportConfirm(true);
   };
 
+  // Interaction 1: Observe FAB Confirmation Modal (closes modal, nothing else)
   const handleConfirmReport = () => {
     setReporting(true);
-    // Simulate API request delay to throttle double-tap submissions
     setTimeout(() => {
       setReporting(false);
       setShowReportConfirm(false);
       if (Platform.OS === 'web') {
-        alert('Success: Zone reported as smoke-free! Air quality indicators updated.');
+        alert('Confirmed: Observe Modal closed.');
       } else {
-        Alert.alert(
-          'Report Submitted', 
-          'Thank you! Your report has been logged and the live air map has been updated.'
-        );
+        Alert.alert('Confirmed', 'Observation Intent Registered.');
       }
-    }, 1500);
+    }, 800);
   };
 
   const handleProfilePress = () => {
     router.push('/supabase-test');
   };
 
-  // 1. Render Splash hold-to-scan gesture overlay initially
-  if (showSplash) {
-    return <SplashOverlay onComplete={handleSplashComplete} />;
-  }
+  // Helper projection to map GPS coordinates to screen pixel offsets
+  const getCoordinateOffset = (lat: number, lng: number) => {
+    // Map center is at x=180, y=300
+    const y = 300 - (lat - JAKARTA_CENTER.latitude) * 3500;
+    const x = 180 + (lng - JAKARTA_CENTER.longitude) * 3500;
+    return { x, y };
+  };
 
-  // 2. Render Onboarding slider overlays if not yet complete
+  // 1. Render Onboarding slider overlays if not yet complete
   if (!isOnboarded) {
     return <OnboardingOverlay onComplete={handleOnboardingComplete} />;
   }
 
-  // 3. Render Main Map dashboard view once onboarded
+  // 2. Render Main Map dashboard view once onboarded
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Base Map Image Layer */}
@@ -164,6 +170,35 @@ export default function HomeScreen() {
         </View>
       </View>
 
+      {/* Render live reported smoke-free observations dynamically */}
+      {observations.map((obs, idx) => {
+        const pos = getCoordinateOffset(obs.latitude, obs.longitude);
+        // Bounds checking
+        if (pos.x < 0 || pos.x > 380 || pos.y < 50 || pos.y > 600) return null;
+        
+        return (
+          <View
+            key={obs.id || idx}
+            style={[
+              styles.heatmapCircle,
+              { 
+                top: pos.y - 75,
+                left: pos.x - 75,
+                backgroundColor: colors.heatmapLight + '33',
+                borderColor: colors.heatmapLight
+              }
+            ]}
+            accessible={true}
+            accessibilityLabel="Geolocated smoke-free reported zone."
+          >
+            <Icon name="check" size={32} color={colors.primary} />
+            <View style={[styles.badge, { backgroundColor: colors.backgroundElement }]}>
+              <Text style={[styles.badgeText, { color: colors.primary }]}>Bebas Asap</Text>
+            </View>
+          </View>
+        );
+      })}
+
       {/* Floating Header UI */}
       <View style={styles.floatingHeader}>
         {/* Glassmorphic Search Bar */}
@@ -175,7 +210,7 @@ export default function HomeScreen() {
             style={[styles.searchInput, { color: colors.text }]}
             accessibilityRole="search"
             accessibilityLabel="Search locations input field"
-            editable={false} // Readonly display in prototype
+            editable={false}
           />
         </View>
 
@@ -196,7 +231,21 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
-      {/* Primary reporting FAB */}
+      {/* Floating GPS Button */}
+      <Pressable
+        onPress={requestLocation}
+        style={({ pressed }) => [
+          styles.gpsButton,
+          { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+          pressed && { opacity: 0.7 }
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel="Refresh current GPS location"
+      >
+        <Icon name="my-location" size={24} themeColor="text" />
+      </Pressable>
+
+      {/* Observe Button (FAB) (Interaction 1 - Confirmation Modal) */}
       <Pressable
         onPress={handleFABPress}
         style={({ pressed }) => [
@@ -205,12 +254,50 @@ export default function HomeScreen() {
           pressed && { transform: [{ scale: 0.95 }] },
         ]}
         accessibilityRole="button"
-        accessibilityLabel="Report current location as smoke-free"
+        accessibilityLabel="Confirm observe action dialog"
       >
-        <Icon name="air" size={28} color="#ffffff" />
+        <Icon name="warning" size={28} color="#ffffff" />
       </Pressable>
 
-      {/* Report confirmation modal */}
+      {/* Bottom Navigation Bar */}
+      <View style={[styles.bottomNav, { backgroundColor: colors.backgroundElement, borderTopColor: colors.border }]}>
+        {/* Home Tab */}
+        <Pressable 
+          style={styles.navItem} 
+          accessibilityRole="button" 
+          accessibilityLabel="Home Map screen active"
+        >
+          <Icon name="home" size={24} color={colors.primary} />
+        </Pressable>
+
+        {/* Center Floating Air Button (Interaction 2 - scan flow) */}
+        <Pressable
+          onPress={() => router.push('/air')}
+          style={({ pressed }) => [
+            styles.navItem,
+            pressed && { transform: [{ scale: 0.96 }] }
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Open Air report observation scanner"
+        >
+          <Icon name="air" size={24} color={colors.textSecondary} />
+        </Pressable>
+
+        {/* Database Test Tab */}
+        <Pressable
+          onPress={handleProfilePress}
+          style={({ pressed }) => [
+            styles.navItem,
+            pressed && { opacity: 0.7 }
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Database connection diagnostics screen"
+        >
+          <Icon name="person" size={24} color={colors.textSecondary} />
+        </Pressable>
+      </View>
+
+      {/* Observe confirmation modal */}
       <ReportConfirmModal
         visible={showReportConfirm}
         onCancel={reporting ? () => {} : () => setShowReportConfirm(false)}
@@ -241,6 +328,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.three,
+    zIndex: 20,
   },
   searchBar: {
     flex: 1,
@@ -303,11 +391,28 @@ const styles = StyleSheet.create({
     fontSize: Typography.caption.fontSize,
     fontWeight: '700',
   },
+  gpsButton: {
+    position: 'absolute',
+    right: Spacing.four,
+    bottom: 110,
+    width: 48,
+    height: 48,
+    borderRadius: Radius.full,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+    zIndex: 10,
+  },
   fab: {
     position: 'absolute',
-    bottom: 40,
+    bottom: 110,
     left: '50%',
-    marginLeft: -32, // w-64 is 64 width, so offset is half (32) to align center
+    marginLeft: -32,
     width: 64,
     height: 64,
     borderRadius: Radius.full,
@@ -318,5 +423,25 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 24,
     elevation: 8,
+    zIndex: 10,
+  },
+  bottomNav: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 72,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    paddingBottom: Spacing.two,
+    zIndex: 10,
+  },
+  navItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    height: '100%',
   },
 });
