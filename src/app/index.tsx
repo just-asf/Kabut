@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, TextInput, Pressable, useColorScheme, Platform, Alert, Dimensions, ScrollView, Keyboard } from 'react-native';
+import { StyleSheet, View, Text, TextInput, Pressable, useColorScheme, Platform, Alert, Dimensions, ScrollView, Keyboard, ActivityIndicator } from 'react-native';
 import { Image } from 'expo-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
@@ -60,6 +60,8 @@ export default function HomeScreen() {
   const [showLegend, setShowLegend] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearchingResults, setIsSearchingResults] = useState(false);
 
   const [mapRegion, setMapRegion] = useState({
     latitude: JAKARTA_CENTER.latitude,
@@ -132,18 +134,72 @@ export default function HomeScreen() {
     }
   };
 
-  // Interaction 1: Observe FAB Confirmation Modal (closes modal, nothing else)
+  // Debounced geocoding location search (Task 1)
+  useEffect(() => {
+    if (searchQuery.trim().length <= 2) {
+      setSearchResults([]);
+      return;
+    }
+
+    const delayDebounce = setTimeout(async () => {
+      setIsSearchingResults(true);
+      try {
+        const coords = await Location.geocodeAsync(searchQuery);
+        if (coords && coords.length > 0) {
+          const results = await Promise.all(
+            coords.slice(0, 4).map(async (coord) => {
+              try {
+                const addresses = await Location.reverseGeocodeAsync({
+                  latitude: coord.latitude,
+                  longitude: coord.longitude,
+                });
+                if (addresses && addresses.length > 0) {
+                  const addr = addresses[0];
+                  const formattedName = [
+                    addr.name,
+                    addr.street,
+                    addr.district,
+                    addr.city,
+                  ]
+                    .filter(Boolean)
+                    .join(', ');
+                  return {
+                    name: formattedName || searchQuery,
+                    latitude: coord.latitude,
+                    longitude: coord.longitude,
+                  };
+                }
+              } catch (err) {
+                // Reverse geocoding failed, fallback to coordinate format
+              }
+              return {
+                name: `${searchQuery} (${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)})`,
+                latitude: coord.latitude,
+                longitude: coord.longitude,
+              };
+            })
+          );
+          setSearchResults(results);
+        } else {
+          setSearchResults([]);
+        }
+      } catch (err) {
+        console.warn('Geocoding search failed:', err);
+        setSearchResults([]);
+      } finally {
+        setIsSearchingResults(false);
+      }
+    }, 600);
+
+    return () => clearTimeout(delayDebounce);
+  }, [searchQuery]);
+
+  // Interaction 1: Observe Confirmation triggers loading, modal auto-closes on success animation finish
   const handleConfirmReport = () => {
     setReporting(true);
     setTimeout(() => {
       setReporting(false);
-      setShowReportConfirm(false);
-      if (Platform.OS === 'web') {
-        alert('Confirmed: Observe Modal closed.');
-      } else {
-        Alert.alert('Confirmed', 'Observation Intent Registered.');
-      }
-    }, 800);
+    }, 1200);
   };
 
   // Helper projection to map GPS coordinates to screen pixel offsets for Web mockup map
@@ -202,7 +258,7 @@ export default function HomeScreen() {
 
   const activeCells = getHeatmapCells();
 
-  const handleSearchSelect = (loc: typeof MOCK_LOCATIONS[0]) => {
+  const handleSearchSelect = (loc: any) => {
     setSearchQuery(loc.name);
     setIsSearching(false);
     Keyboard.dismiss();
@@ -210,8 +266,8 @@ export default function HomeScreen() {
     const targetRegion = {
       latitude: loc.latitude,
       longitude: loc.longitude,
-      latitudeDelta: 0.012,
-      longitudeDelta: 0.012,
+      latitudeDelta: Math.min(mapRegion.latitudeDelta, 0.012),
+      longitudeDelta: Math.min(mapRegion.longitudeDelta, 0.012),
     };
     setMapRegion(targetRegion);
 
@@ -220,9 +276,14 @@ export default function HomeScreen() {
     }
   };
 
-  const filteredResults = searchQuery.length === 0
-    ? MOCK_LOCATIONS.slice(0, 3)
-    : MOCK_LOCATIONS.filter(l => l.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const getSearchResults = () => {
+    if (Platform.OS === 'web') {
+      return searchQuery.trim().length === 0
+        ? MOCK_LOCATIONS.slice(0, 3)
+        : MOCK_LOCATIONS.filter(l => l.name.toLowerCase().includes(searchQuery.toLowerCase()));
+    }
+    return searchQuery.trim().length === 0 ? MOCK_LOCATIONS.slice(0, 3) : searchResults;
+  };
 
   // 1. Render Onboarding slider overlays if not yet complete
   if (!isOnboarded) {
@@ -413,12 +474,16 @@ export default function HomeScreen() {
             <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
               {searchQuery.length === 0 ? 'Recent searches' : 'Search results'}
             </Text>
-            {filteredResults.length === 0 ? (
+            {isSearchingResults ? (
+              <View style={styles.loadingSearchContainer}>
+                <ActivityIndicator size="small" color={colors.primary} />
+              </View>
+            ) : getSearchResults().length === 0 ? (
               <View style={styles.noResultsContainer}>
                 <Text style={[styles.noResultsText, { color: colors.textSecondary }]}>No location found</Text>
               </View>
             ) : (
-              filteredResults.map((loc, idx) => (
+              getSearchResults().map((loc, idx) => (
                 <Pressable
                   key={idx}
                   onPress={() => handleSearchSelect(loc)}
@@ -705,6 +770,11 @@ const styles = StyleSheet.create({
   searchResultText: {
     fontFamily: Fonts.sans,
     fontSize: Typography.bodyLg.fontSize,
+  },
+  loadingSearchContainer: {
+    paddingVertical: Spacing.eight,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   noResultsContainer: {
     paddingVertical: Spacing.eight,

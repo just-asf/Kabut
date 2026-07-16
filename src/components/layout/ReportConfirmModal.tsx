@@ -1,5 +1,5 @@
-import React from 'react';
-import { StyleSheet, View, Text, Modal, Pressable, useColorScheme } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, View, Text, Modal, Pressable, useColorScheme, Animated, Vibration } from 'react-native';
 import { Colors, Radius, Spacing, Typography, Fonts } from '@/constants/theme';
 import { Icon } from '@/components/ui/Icon';
 import { Button } from '@/components/ui/Button';
@@ -16,64 +16,134 @@ export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = fal
   const activeScheme = scheme === 'dark' ? 'dark' : 'light';
   const colors = Colors[activeScheme];
 
+  const [status, setStatus] = useState<'CONFIRM' | 'LOADING' | 'SUCCESS'>('CONFIRM');
+  const scaleAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      setStatus('CONFIRM');
+      scaleAnim.setValue(0);
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (visible) {
+      if (loading) {
+        setStatus('LOADING');
+      } else if (status === 'LOADING') {
+        setStatus('SUCCESS');
+        
+        // Trigger success haptic vibration twice (Short -> Pause -> Short)
+        Vibration.vibrate(100);
+        setTimeout(() => {
+          Vibration.vibrate(100);
+        }, 200);
+
+        // Auto dismiss after 3 seconds
+        const timer = setTimeout(() => {
+          onCancel();
+        }, 3000);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [loading, visible]);
+
+  useEffect(() => {
+    if (status === 'SUCCESS') {
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 50,
+        friction: 4,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [status]);
+
+  const handleBackdropPress = () => {
+    if (status === 'SUCCESS') {
+      onCancel(); // Allow user to tap anywhere to dismiss success animation early
+    } else if (status === 'CONFIRM') {
+      onCancel();
+    }
+  };
+
   return (
     <Modal
       transparent
       visible={visible}
       animationType="fade"
-      onRequestClose={loading ? undefined : onCancel}
+      onRequestClose={status === 'LOADING' ? undefined : onCancel}
     >
-      <View style={styles.backdrop}>
-        {/* Click outside to dismiss (optional, but standard UX) */}
-        <Pressable 
-          style={StyleSheet.absoluteFillObject} 
-          onPress={loading ? undefined : onCancel}
-          accessible={true}
-          accessibilityLabel="Dismiss report confirm dialog"
-          accessibilityRole="button"
-        />
-        
+      <Pressable 
+        style={styles.backdrop} 
+        onPress={handleBackdropPress}
+        accessible={true}
+        accessibilityLabel={status === 'SUCCESS' ? "Tap to close success confirmation" : "Dismiss report confirm dialog"}
+        accessibilityRole="button"
+      >
         {/* Modal content card */}
-        <View 
+        <Pressable 
           style={[styles.modalCard, { backgroundColor: colors.backgroundElement }]}
           accessible={true}
           accessibilityRole="alert"
+          onPress={(e) => {
+            e.stopPropagation(); // Prevent dismissing when clicking card content itself (unless in success state)
+            if (status === 'SUCCESS') {
+              onCancel(); // In success state, tapping anywhere (even on the card) dismisses it
+            }
+          }}
         >
-          <View style={styles.content}>
-            <View style={styles.iconContainer} accessible={false}>
-              <Icon name="warning" size={48} color={colors.primary} />
+          {status === 'SUCCESS' ? (
+            <View style={styles.content}>
+              <Animated.View style={[styles.iconContainer, { transform: [{ scale: scaleAnim }] }]}>
+                <Icon name="check-circle" size={56} color={colors.primary} />
+              </Animated.View>
+              <Text style={[styles.title, { color: colors.text, marginTop: Spacing.three }]}>
+                Observation confirmed
+              </Text>
+              <Text style={[styles.bodyText, { color: colors.textSecondary, marginTop: Spacing.two }]}>
+                Your report has been successfully recorded. Thank you for helping keep the air smoke-free!
+              </Text>
             </View>
-            <Text style={[styles.title, { color: colors.text }]}>Are you sure?</Text>
-            <Text style={[styles.bodyText, { color: colors.textSecondary }]}>
-              You're about to report that this place is currently smoke-free. Your report will help update the live air status for other users.
-            </Text>
-          </View>
-          
-          <View style={styles.buttonRow}>
-            <View style={styles.buttonWrapper}>
-              <Button 
-                label="Cancel" 
-                onPress={onCancel} 
-                variant="outlined" 
-                disabled={loading}
-                accessibilityLabel="Cancel reporting smoke-free zone"
-                style={styles.pillButton}
-              />
-            </View>
-            <View style={styles.buttonWrapper}>
-              <Button 
-                label="Confirm" 
-                onPress={onConfirm} 
-                variant="filled" 
-                disabled={loading}
-                loading={loading}
-                accessibilityLabel="Confirm reporting smoke-free zone"
-                style={styles.pillButton}
-              />
-            </View>
-          </View>
-        </View>
-      </View>
+          ) : (
+            <>
+              <View style={styles.content}>
+                <View style={styles.iconContainer} accessible={false}>
+                  <Icon name="warning" size={48} color={colors.primary} />
+                </View>
+                <Text style={[styles.title, { color: colors.text }]}>Are you sure?</Text>
+                <Text style={[styles.bodyText, { color: colors.textSecondary }]}>
+                  You're about to report that this place is currently smoke-free. Your report will help update the live air status for other users.
+                </Text>
+              </View>
+              
+              <View style={styles.buttonRow}>
+                <View style={styles.buttonWrapper}>
+                  <Button 
+                    label="Cancel" 
+                    onPress={onCancel} 
+                    variant="outlined" 
+                    disabled={status === 'LOADING'}
+                    accessibilityLabel="Cancel reporting smoke-free zone"
+                    style={styles.pillButton}
+                  />
+                </View>
+                <View style={styles.buttonWrapper}>
+                  <Button 
+                    label="Confirm" 
+                    onPress={onConfirm} 
+                    variant="filled" 
+                    disabled={status === 'LOADING'}
+                    loading={status === 'LOADING'}
+                    accessibilityLabel="Confirm reporting smoke-free zone"
+                    style={styles.pillButton}
+                  />
+                </View>
+              </View>
+            </>
+          )}
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
