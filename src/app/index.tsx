@@ -234,6 +234,7 @@ export default function HomeScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearchingResults, setIsSearchingResults] = useState(false);
+  const [isLoadingOnboarding, setIsLoadingOnboarding] = useState(true);
 
   const [mapRegion, setMapRegion] = useState({
     latitude: JAKARTA_CENTER.latitude,
@@ -252,6 +253,8 @@ export default function HomeScreen() {
         }
       } catch (err) {
         console.error('Failed to load onboarding state:', err);
+      } finally {
+        setIsLoadingOnboarding(false);
       }
     }
     loadOnboardingState();
@@ -482,12 +485,17 @@ export default function HomeScreen() {
     return searchQuery.trim().length === 0 ? MOCK_LOCATIONS : searchResults;
   };
 
-  // 1. Render Onboarding slider overlays if not yet complete
+  // 1. Render blank/spinner view while loading state from storage
+  if (isLoadingOnboarding) {
+    return <View style={{ flex: 1, backgroundColor: colors.background }} />;
+  }
+
+  // 2. Render Onboarding slider overlays if not yet complete
   if (!isOnboarded) {
     return <OnboardingOverlay onComplete={handleOnboardingComplete} />;
   }
 
-  // 2. Render Main Map dashboard view once onboarded
+  // 3. Render Main Map dashboard view once onboarded
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       
