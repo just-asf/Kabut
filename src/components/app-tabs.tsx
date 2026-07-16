@@ -15,17 +15,17 @@ export default function AppTabs() {
       labelStyle={{ selected: { color: colors.text } }}>
       <NativeTabs.Trigger name="index">
         <Label>Home</Label>
-        <Icon src={require('@/assets/images/tabIcons/home.png')} />
+        <Icon src={require('../../assets/images/tabIcons/home.png')} />
       </NativeTabs.Trigger>
 
       <NativeTabs.Trigger name="explore">
         <Label>Explore</Label>
-        <Icon src={require('@/assets/images/tabIcons/explore.png')} />
+        <Icon src={require('../../assets/images/tabIcons/explore.png')} />
       </NativeTabs.Trigger>
 
       <NativeTabs.Trigger name="supabase-test">
         <Label>Supabase Test</Label>
-        <Icon src={require('@/assets/images/tabIcons/explore.png')} />
+        <Icon src={require('../../assets/images/tabIcons/explore.png')} />
       </NativeTabs.Trigger>
     </NativeTabs>
   );
