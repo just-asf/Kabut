@@ -297,11 +297,10 @@ export default function HomeScreen() {
     }
   };
 
-  // Fetch observations and location upon onboarding completion
+  // Fetch observations upon onboarding completion
   useEffect(() => {
     if (isOnboarded) {
       fetchObservations();
-      requestLocation();
     }
   }, [isOnboarded]);
 
@@ -335,47 +334,17 @@ export default function HomeScreen() {
       try {
         const coords = await Location.geocodeAsync(searchQuery);
         if (coords && coords.length > 0) {
-          const apiResults = await Promise.all(
-            coords.slice(0, 3).map(async (coord) => {
-              try {
-                const addresses = await Location.reverseGeocodeAsync({
-                  latitude: coord.latitude,
-                  longitude: coord.longitude,
-                });
-                if (addresses && addresses.length > 0) {
-                  const addr = addresses[0];
-                  const formattedName = [
-                    addr.name,
-                    addr.street,
-                    addr.district,
-                    addr.city,
-                  ]
-                    .filter(Boolean)
-                    .join(', ');
-                  return {
-                    name: formattedName || searchQuery,
-                    latitude: coord.latitude,
-                    longitude: coord.longitude,
-                  };
-                }
-              } catch (err) {
-                // Ignore
-              }
-              return {
-                name: `${searchQuery} (${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)})`,
-                latitude: coord.latitude,
-                longitude: coord.longitude,
-              };
-            })
-          );
+          const apiResults = coords.slice(0, 3).map((coord, idx) => ({
+            name: `${searchQuery} #${idx + 1}`,
+            latitude: coord.latitude,
+            longitude: coord.longitude,
+          }));
 
           // Merge local and API results, removing duplicates
           const merged: any[] = [...localResults];
           apiResults.forEach(apiRes => {
             const exists = merged.some(
               localRes =>
-                localRes.name.toLowerCase().includes(apiRes.name.toLowerCase()) ||
-                apiRes.name.toLowerCase().includes(localRes.name.toLowerCase()) ||
                 (Math.abs(localRes.latitude - apiRes.latitude) < 0.001 &&
                   Math.abs(localRes.longitude - apiRes.longitude) < 0.001)
             );
@@ -419,6 +388,9 @@ export default function HomeScreen() {
   const getHeatmapCells = () => {
     const now = new Date().getTime();
     const activeObs = observations.filter(obs => {
+      if (!obs || !obs.created_at || obs.latitude === undefined || obs.latitude === null || obs.longitude === undefined || obs.longitude === null) {
+        return false;
+      }
       const ageMs = now - new Date(obs.created_at).getTime();
       return ageMs < 60 * 60 * 1000; // 60 minutes time-decay
     });
