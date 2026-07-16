@@ -31,6 +31,7 @@ interface AppStore {
   observations: any[];
   setObservations: (obs: any[]) => void;
   fetchObservations: () => Promise<void>;
+  startGpsAcquisition: () => Promise<Location.LocationObject | null>;
   submitObservation: () => Promise<boolean>;
   resetScan: () => void;
 }
@@ -54,6 +55,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setObservations: (obs) => set({ observations: obs }),
 
   fetchObservations: async () => {
+    console.log('[10] Authentication Check Started');
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        await supabase.auth.signInAnonymously();
+      }
+    } catch (err) {
+      console.warn('Startup auth check failed:', err);
+    }
+    console.log('[11] Authentication Check Finished');
+
+    console.log('[12] Fetch Observations Started');
     try {
       const { data, error } = await supabase
         .from('observations')
@@ -64,35 +77,83 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (err) {
       console.warn('Failed to fetch observations from Supabase:', err);
     }
+    console.log('[13] Fetch Observations Finished');
+  },
+
+  startGpsAcquisition: async () => {
+    try {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') return null;
+      
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      set({ location: loc, locationError: null });
+      return loc;
+    } catch (err) {
+      console.warn('Background GPS acquisition failed:', err);
+      return null;
+    }
   },
 
   submitObservation: async () => {
-    // 1. Set to GPS validation state
     set({ observationState: 'GPS' });
     
     try {
-      // Check location permission and get coords
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
+      // 1. Check internet connectivity
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        await fetch('https://dvbgfjjzggnlrixsqkss.supabase.co', { method: 'HEAD', signal: controller.signal });
+        clearTimeout(timeoutId);
+      } catch (err) {
         set({ 
-          locationError: 'Location permission required to submit observations.', 
+          locationError: 'Network connection failed. Verify your device is connected to the Internet.', 
           observationState: 'FAILED' 
         });
         return false;
       }
 
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      set({ location: loc, observationState: 'VALIDATION' });
+      // 2. Check anonymous session
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        const { error: authError } = await supabase.auth.signInAnonymously();
+        if (authError) {
+          console.warn('Supabase anonymous sign-in failed:', authError.message);
+        }
+      }
 
-      // Run validation (e.g. coordinates sanity check, anti-spam delay)
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      // 3. Acquire GPS (reuse background position or request it now)
+      let loc = get().location;
+      if (!loc) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          set({ 
+            locationError: 'Geotagging failed: Location permission was denied.', 
+            observationState: 'FAILED' 
+          });
+          return false;
+        }
+        loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        set({ location: loc });
+      }
 
+      // 4. Anti-spam & coordinates sanity check validation
+      set({ observationState: 'VALIDATION' });
+      if (!loc || Math.abs(loc.coords.latitude) > 90 || Math.abs(loc.coords.longitude) > 180) {
+        set({ 
+          locationError: 'Validation failed: Invalid GPS coordinate parameters.', 
+          observationState: 'FAILED' 
+        });
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // 5. Upload to Supabase
       set({ observationState: 'UPLOAD' });
-
-      // 2. Insert observation record to Supabase
-      const { error } = await supabase
+      const insertPromise = supabase
         .from('observations')
         .insert([
           {
@@ -103,23 +164,26 @@ export const useAppStore = create<AppStore>((set, get) => ({
           }
         ]);
 
-      if (error) {
-        // Handle database table missing (42P01 / PGRST205) or any other insert error
-        console.error('Database insertion error:', error);
-        throw error;
-      }
+      // Handle insert and fetch observations asynchronously in the background
+      (async () => {
+        try {
+          const { error } = await insertPromise;
+          if (error) {
+            console.error('Background upload failed:', error.message);
+          }
+          await get().fetchObservations();
+        } catch (err: any) {
+          console.error('Background upload exception:', err);
+        }
+      })();
 
       set({ observationState: 'WAIT_RESPONSE' });
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Refresh local observations and trigger heatmap refresh
-      set({ observationState: 'REFRESH_HEATMAP' });
-      await get().fetchObservations();
+      await new Promise((resolve) => setTimeout(resolve, 400));
       
-      set({ observationState: 'IDLE', scanProgress: 0 });
+      set({ observationState: 'REFRESH_HEATMAP' });
       return true;
     } catch (err) {
-      console.error('Failed to upload observation:', err);
+      console.error('Failed to submit observation:', err);
       set({ observationState: 'FAILED' });
       return false;
     }
@@ -133,3 +197,5 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
   }
 }));
+
+console.log('[4] Zustand Store Initialized');

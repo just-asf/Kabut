@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, Text, Pressable, useColorScheme, BackHandler, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, Text, Pressable, useColorScheme, BackHandler, ActivityIndicator, Vibration, Dimensions } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -20,12 +20,15 @@ export default function AirScanScreen() {
   const activeScheme = scheme === 'dark' ? 'dark' : 'light';
   const colors = Colors[activeScheme];
 
+  const { height: windowHeight } = Dimensions.get('window');
+
   const {
     observationState,
     setObservationState,
     scanProgress,
     setScanProgress,
     locationError,
+    startGpsAcquisition,
     submitObservation,
     resetScan,
   } = useAppStore();
@@ -46,6 +49,11 @@ export default function AirScanScreen() {
   const timer2 = useRef<NodeJS.Timeout | null>(null);
   const timer3 = useRef<NodeJS.Timeout | null>(null);
   const successTimer = useRef<NodeJS.Timeout | null>(null);
+
+  // Trigger background GPS acquisition immediately when screen opens
+  useEffect(() => {
+    startGpsAcquisition();
+  }, []);
 
   // Pulse animations for background rings when IDLE/HOLDING
   useEffect(() => {
@@ -163,13 +171,22 @@ export default function AirScanScreen() {
     // Trigger backend upload flow
     const success = await submitObservation();
     if (success) {
+      // Trigger success haptic feedback twice (Short vibration -> Pause -> Short vibration)
+      Vibration.vibrate(100);
+      setTimeout(() => {
+        Vibration.vibrate(100);
+      }, 200);
+
       setObservationState('SUCCESS');
-      // Show success animation for 1.2s then navigate back
+      // Show success animation for 3.0s then navigate back
       setTimeout(() => {
         resetScan();
         router.back();
-      }, 1200);
+      }, 3000);
     } else {
+      // Trigger failure haptic feedback once
+      Vibration.vibrate(100);
+
       // Check if failed due to location permissions
       // Note: useAppStore updates locationError if permission denied
       if (useAppStore.getState().locationError) {
@@ -182,11 +199,20 @@ export default function AirScanScreen() {
     setDeniedExplanation(null);
     const success = await submitObservation();
     if (success) {
+      // Trigger success haptic feedback twice (Short vibration -> Pause -> Short vibration)
+      Vibration.vibrate(100);
+      setTimeout(() => {
+        Vibration.vibrate(100);
+      }, 200);
+
       setObservationState('SUCCESS');
       setTimeout(() => {
         resetScan();
         router.back();
-      }, 1200);
+      }, 3000);
+    } else {
+      // Trigger failure haptic feedback once
+      Vibration.vibrate(100);
     }
   };
 
@@ -253,7 +279,7 @@ export default function AirScanScreen() {
   const showCloseButton = observationState === 'IDLE' || observationState === 'FAILED';
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: colors.background, height: windowHeight }]}>
       {/* Top Bar with Cancel / Back Button */}
       {showCloseButton && (
         <View style={styles.topBar}>

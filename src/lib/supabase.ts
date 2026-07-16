@@ -64,6 +64,8 @@ try {
 const fallbackUrl = 'https://placeholder-url-for-ssr-safety.supabase.co';
 const fallbackKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy.key';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 // Native in-memory storage fallback
 class InMemoryStorage {
   private store = new Map<string, string>();
@@ -83,7 +85,7 @@ class InMemoryStorage {
 
 const nativeMemoryStorage = new InMemoryStorage();
 
-// Storage strategy: Web uses localStorage, Native uses expo-secure-store
+// Storage strategy: Web uses localStorage, Native uses AsyncStorage
 const customStorage = {
   getItem: async (key: string): Promise<string | null> => {
     if (Platform.OS === 'web') {
@@ -92,7 +94,7 @@ const customStorage = {
       }
       return null;
     }
-    return SecureStore.getItemAsync(key);
+    return AsyncStorage.getItem(key);
   },
   setItem: async (key: string, value: string): Promise<void> => {
     if (Platform.OS === 'web') {
@@ -101,7 +103,7 @@ const customStorage = {
       }
       return;
     }
-    await SecureStore.setItemAsync(key, value);
+    await AsyncStorage.setItem(key, value);
   },
   removeItem: async (key: string): Promise<void> => {
     if (Platform.OS === 'web') {
@@ -110,7 +112,7 @@ const customStorage = {
       }
       return;
     }
-    await SecureStore.deleteItemAsync(key);
+    await AsyncStorage.removeItem(key);
   },
 };
 
@@ -128,7 +130,7 @@ export const supabase = createClient(
     },
   }
 );
-console.log('Supabase client singleton created successfully.');
+console.log('[9] Supabase Client Created');
 
 // Export initialization error status for diagnostics
 export const supabaseInitError = initializationError;

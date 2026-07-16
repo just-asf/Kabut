@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, Text, useColorScheme, Dimensions, Pressable } from 'react-native';
-import Animated, { FadeIn, FadeOut, Layout, useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut, Layout, useSharedValue, useAnimatedStyle, withTiming, runOnJS } from 'react-native-reanimated';
 import { Image } from 'expo-image';
 import { Colors, Radius, Spacing, Typography, Fonts } from '@/constants/theme';
 import { Button } from '@/components/ui/Button';
@@ -26,8 +26,8 @@ export function OnboardingOverlay({ onComplete }: OnboardingOverlayProps) {
     } else {
       overlayOpacity.value = withTiming(0, { duration: 500 }, (finished) => {
         if (finished) {
-          // Complete onboarding
-          onComplete();
+          // Complete onboarding on JS thread
+          runOnJS(onComplete)();
         }
       });
     }
