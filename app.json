@@ -29,9 +29,13 @@
     },
     "plugins": [
       "expo-router",
+<<<<<<< HEAD
+      "expo-web-browser"
+=======
       "expo-web-browser",
       "expo-font",
       "expo-secure-store"
+>>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
     ]
   }
 }

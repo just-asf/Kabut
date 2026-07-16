@@ -73,12 +73,16 @@ export default function SupabaseTestScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {/* Header */}
           <ThemedView style={styles.header}>
+<<<<<<< HEAD
+            <Pressable onPress={() => router.back()} style={styles.backButton}>
+=======
             <Pressable 
               onPress={() => router.back()} 
               style={styles.backButton}
               accessibilityRole="button"
               accessibilityLabel="Go back to the previous screen"
             >
+>>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
               <ThemedText style={{ color: theme.textSecondary }}>← Back</ThemedText>
             </Pressable>
             <ThemedText type="subtitle" style={styles.headerTitle}>
@@ -220,9 +224,12 @@ export default function SupabaseTestScreen() {
           <Pressable
             disabled={loading}
             onPress={runTest}
+<<<<<<< HEAD
+=======
             accessibilityRole="button"
             accessibilityLabel="Run Supabase Connection Test"
             accessibilityState={{ disabled: loading }}
+>>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
             style={({ pressed }) => [
               styles.actionButton,
               {
