@@ -1,3 +1,5 @@
+console.log('[1] JS Bundle Loaded');
+
 import React, { useEffect } from 'react';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import * as SplashScreen from 'expo-splash-screen';
@@ -12,6 +14,11 @@ SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+
+  useEffect(() => {
+    console.log('[2] RootLayout Mounted');
+    console.log('[3] SafeAreaProvider Mounted');
+  }, []);
 
   return (
     <SafeAreaProvider>

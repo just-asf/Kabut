@@ -55,6 +55,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setObservations: (obs) => set({ observations: obs }),
 
   fetchObservations: async () => {
+    console.log('[10] Authentication Check Started');
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        await supabase.auth.signInAnonymously();
+      }
+    } catch (err) {
+      console.warn('Startup auth check failed:', err);
+    }
+    console.log('[11] Authentication Check Finished');
+
+    console.log('[12] Fetch Observations Started');
     try {
       const { data, error } = await supabase
         .from('observations')
@@ -65,6 +77,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (err) {
       console.warn('Failed to fetch observations from Supabase:', err);
     }
+    console.log('[13] Fetch Observations Finished');
   },
 
   startGpsAcquisition: async () => {
@@ -184,3 +197,5 @@ export const useAppStore = create<AppStore>((set, get) => ({
     });
   }
 }));
+
+console.log('[4] Zustand Store Initialized');

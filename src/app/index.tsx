@@ -11,19 +11,7 @@ import { Icon } from '@/components/ui/Icon';
 import { Button } from '@/components/ui/Button';
 import { useAppStore } from '@/store/useAppStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-// Conditional import of react-native-maps for native platforms
-let MapView: any = null;
-let MapCircle: any = null;
-if (Platform.OS !== 'web') {
-  try {
-    const Maps = require('react-native-maps');
-    MapView = Maps.default;
-    MapCircle = Maps.Circle;
-  } catch (err) {
-    console.warn('Failed to load react-native-maps:', err);
-  }
-}
+import { MapView, MapCircle } from '@/components/MapComponent';
 
 const ONBOARDING_STORAGE_KEY = 'onboarding_completed';
 const JAKARTA_CENTER = { latitude: -6.2088, longitude: 106.8456 };
@@ -251,11 +239,14 @@ export default function HomeScreen() {
   // Load onboarding state from storage
   useEffect(() => {
     async function loadOnboardingState() {
+      console.log('[6] AsyncStorage Read Started');
       try {
         const value = await AsyncStorage.getItem(ONBOARDING_STORAGE_KEY);
+        console.log('[7] AsyncStorage Read Finished');
         if (value === 'true') {
           setIsOnboarded(true);
         }
+        console.log('[8] Onboarding State Loaded');
       } catch (err) {
         console.error('Failed to load onboarding state:', err);
       } finally {
@@ -303,6 +294,12 @@ export default function HomeScreen() {
       fetchObservations();
     }
   }, [isOnboarded]);
+
+  useEffect(() => {
+    if (isOnboarded && !isLoadingOnboarding) {
+      console.log('[16] Main Screen Rendered');
+    }
+  }, [isOnboarded, isLoadingOnboarding]);
 
   const handleOnboardingComplete = async () => {
     try {
@@ -407,7 +404,7 @@ export default function HomeScreen() {
       cells[key].count += 1;
     });
 
-    return Object.values(cells)
+    const cellsList = Object.values(cells)
       .filter(cell => cell.count >= 3) // Only render if count >= 3 (Light threshold)
       .map(cell => {
         let color: string = colors.heatmapLight;
@@ -432,6 +429,8 @@ export default function HomeScreen() {
           label,
         };
       });
+    console.log('[14] Heatmap Compiled');
+    return cellsList;
   };
 
   const activeCells = getHeatmapCells();
@@ -486,6 +485,7 @@ export default function HomeScreen() {
           showsUserLocation={true}
           showsMyLocationButton={false}
           onRegionChangeComplete={(r: any) => setMapRegion(r)}
+          onMapReady={() => console.log('[15] Map Mounted')}
         >
           {/* Heatmap Grid Layer Circles */}
           {activeCells.map((cell, idx) => (
@@ -501,7 +501,7 @@ export default function HomeScreen() {
         </MapView>
       ) : (
         // Web Platform Fallback stylized map
-        <View style={StyleSheet.absoluteFillObject}>
+        <View style={StyleSheet.absoluteFillObject} onLayout={() => console.log('[15] Map Mounted')}>
           <Image
             source="https://lh3.googleusercontent.com/aida-public/AB6AXuDUR3fVXmY8YxF-SaNI3wjHICuOE80xxqNE1I33BZDhMPUj8ueMvZ9eX1b26kpfXhVZAQpJ0pN63hNW1Ase4PQ4V_sEI23lv0wNyCCnw0XZ_L-hxX-TgDGtYr1rfJvWx1q7U8WMPZTZZBv2b0W4o6U_hMGxNfvl5--hwb2FJIHwefw1WuRrnipVGTavuCwkAoz8ViA87lUTLOrLQ9BfsRpFkeP0z-Wzl9zDZDkL9j24YJcAbbIKOyzSZn0c7W_bOBKbe4UcZr5w2fw6"
             style={styles.mapImage}
