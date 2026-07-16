@@ -16,9 +16,7 @@ export default function RootLayout() {
       const initImmersive = async () => {
         try {
           const NavigationBar = require('expo-navigation-bar');
-          await NavigationBar.setPositionAsync('absolute');
           await NavigationBar.setVisibilityAsync('hidden');
-          await NavigationBar.setBehaviorAsync('overlay-swipe');
         } catch (e) {
           console.warn('Android NavigationBar config failed:', e);
         }
