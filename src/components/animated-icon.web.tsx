@@ -58,11 +58,7 @@ export function AnimatedIcon() {
   return (
     <View style={styles.iconContainer}>
       <Animated.View entering={glowKeyframe.duration(60 * 1000 * 4)} style={styles.glow}>
-<<<<<<< HEAD
-        <Image style={styles.glow} source={require('@/assets/images/logo-glow.png')} />
-=======
         <Image style={styles.glow} source={require('../../assets/images/logo-glow.png')} />
->>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
       </Animated.View>
 
       <Animated.View style={styles.background} entering={keyframe.duration(DURATION)}>
@@ -70,11 +66,7 @@ export function AnimatedIcon() {
       </Animated.View>
 
       <Animated.View style={styles.imageContainer} entering={logoKeyframe.duration(DURATION)}>
-<<<<<<< HEAD
-        <Image style={styles.image} source={require('@/assets/images/expo-logo.png')} />
-=======
         <Image style={styles.image} source={require('../../assets/images/expo-logo.png')} />
->>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
       </Animated.View>
     </View>
   );
