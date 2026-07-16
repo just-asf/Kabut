@@ -26,6 +26,7 @@ export default function AirScanScreen() {
     scanProgress,
     setScanProgress,
     locationError,
+    startGpsAcquisition,
     submitObservation,
     resetScan,
   } = useAppStore();
@@ -46,6 +47,11 @@ export default function AirScanScreen() {
   const timer2 = useRef<NodeJS.Timeout | null>(null);
   const timer3 = useRef<NodeJS.Timeout | null>(null);
   const successTimer = useRef<NodeJS.Timeout | null>(null);
+
+  // Trigger background GPS acquisition immediately when screen opens
+  useEffect(() => {
+    startGpsAcquisition();
+  }, []);
 
   // Pulse animations for background rings when IDLE/HOLDING
   useEffect(() => {
