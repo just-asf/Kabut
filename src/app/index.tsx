@@ -191,7 +191,7 @@ export default function HomeScreen() {
           accessibilityLabel="Open settings and connection test diagnostics screen"
         >
           <View style={[styles.profileInner, { backgroundColor: colors.backgroundElement }]}>
-            <Icon name="person" size={24} themeColor="textSecondary" />
+            <Icon name="campaign" size={24} themeColor="textSecondary" />
           </View>
         </Pressable>
       </View>

@@ -12,6 +12,7 @@ export type IconName =
   | 'my-location'
   | 'home'
   | 'person'
+  | 'campaign'
   | 'arrow-forward'
   | 'close'
   | 'arrow-back'
@@ -35,6 +36,7 @@ const iconMap: Record<IconName, keyof typeof MaterialIcons.glyphMap> = {
   'my-location': 'my-location',
   'home': 'home',
   'person': 'person',
+  'campaign': 'campaign',
   'arrow-forward': 'arrow-forward',
   'close': 'close',
   'arrow-back': 'arrow-back',

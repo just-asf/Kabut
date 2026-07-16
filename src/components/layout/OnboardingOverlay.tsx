@@ -84,6 +84,13 @@ export function OnboardingOverlay({ onComplete }: OnboardingOverlayProps) {
 
         {currentIndex === 2 && (
           <Animated.View key="slide2" entering={FadeIn.duration(300)} exiting={FadeOut.duration(300)} style={styles.slide}>
+            <View style={[styles.textWrapper, { flex: 0, paddingTop: Spacing.five, paddingBottom: 0 }]}>
+              <Text style={[styles.title, { color: colors.text }]}>Ready to explore?</Text>
+              <Text style={[styles.desc, { color: colors.textSecondary }]}>
+                Start exploring nearby places with live air comfort status and choose the environment that suits you best.
+              </Text>
+            </View>
+
             <View style={styles.mockMapWrapper} accessible={true} accessibilityLabel="Mock map screen preview showcasing search parameters and floating hazard index details.">
               {/* Stylized Mock Map Background */}
               <Image
@@ -128,13 +135,6 @@ export function OnboardingOverlay({ onComplete }: OnboardingOverlayProps) {
                 <Icon name="air" size={20} color={colors.primary} />
                 <Icon name="person" size={20} color={colors.textSecondary} />
               </View>
-            </View>
-
-            <View style={styles.textWrapper}>
-              <Text style={[styles.title, { color: colors.text }]}>Ready to explore?</Text>
-              <Text style={[styles.desc, { color: colors.textSecondary }]}>
-                Start exploring nearby places with live air comfort status and choose the environment that suits you best.
-              </Text>
             </View>
           </Animated.View>
         )}

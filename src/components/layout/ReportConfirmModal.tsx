@@ -57,6 +57,7 @@ export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = fal
                 variant="outlined" 
                 disabled={loading}
                 accessibilityLabel="Cancel reporting smoke-free zone"
+                style={styles.pillButton}
               />
             </View>
             <View style={styles.buttonWrapper}>
@@ -67,6 +68,7 @@ export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = fal
                 disabled={loading}
                 loading={loading}
                 accessibilityLabel="Confirm reporting smoke-free zone"
+                style={styles.pillButton}
               />
             </View>
           </View>
@@ -126,5 +128,8 @@ const styles = StyleSheet.create({
   },
   buttonWrapper: {
     flex: 1,
+  },
+  pillButton: {
+    borderRadius: Radius.full,
   },
 });

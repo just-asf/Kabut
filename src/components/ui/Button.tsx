@@ -12,6 +12,7 @@ interface ButtonProps {
   children?: React.ReactNode;
   accessibilityLabel?: string;
   accessibilityRole?: 'button' | 'checkbox' | 'radio' | 'link';
+  style?: any;
 }
 
 export function Button({
@@ -23,6 +24,7 @@ export function Button({
   children,
   accessibilityLabel,
   accessibilityRole = 'button',
+  style,
 }: ButtonProps) {
   const scheme = useColorScheme();
   const activeScheme = scheme === 'dark' ? 'dark' : 'light';
@@ -34,6 +36,7 @@ export function Button({
       ? { backgroundColor: colors.primary }
       : { backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.border },
     disabled && { opacity: 0.5 },
+    style,
   ];
 
   const textStyle = [
