@@ -33,6 +33,7 @@ interface AppStore {
   fetchObservations: () => Promise<void>;
   startGpsAcquisition: () => Promise<Location.LocationObject | null>;
   submitObservation: () => Promise<boolean>;
+  submitCleanVote: (gridId: string) => Promise<boolean>;
   resetScan: () => void;
 }
 
@@ -69,9 +70,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     console.log('[12] Fetch Observations Started');
     try {
       const { data, error } = await supabase
-        .from('observations')
+        .from('grid_status')
         .select('*')
-        .order('created_at', { ascending: false });
+        .gt('score', 0);
       if (error) throw error;
       set({ observations: data || [] });
     } catch (err) {
@@ -151,23 +152,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      // 5. Upload to Supabase
+      // 5. Upload to Supabase via Edge Function
       set({ observationState: 'UPLOAD' });
-      const insertPromise = supabase
-        .from('observations')
-        .insert([
-          {
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-            status: 'smoke-free',
-            created_at: new Date().toISOString(),
-          }
-        ]);
+      const invokePromise = supabase.functions.invoke('submit-observation', {
+        body: {
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+        },
+      });
 
-      // Handle insert and fetch observations asynchronously in the background
+      // Handle function invocation and fetch observations asynchronously in the background
       (async () => {
         try {
-          const { error } = await insertPromise;
+          const { error } = await invokePromise;
           if (error) {
             console.error('Background upload failed:', error.message);
           }
@@ -185,6 +182,20 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (err) {
       console.error('Failed to submit observation:', err);
       set({ observationState: 'FAILED' });
+      return false;
+    }
+  },
+
+  submitCleanVote: async (gridId: string) => {
+    try {
+      const { error } = await supabase.functions.invoke('submit-clean-vote', {
+        body: { grid_id: gridId },
+      });
+      if (error) throw error;
+      await get().fetchObservations();
+      return true;
+    } catch (err) {
+      console.warn('Failed to submit clean vote:', err);
       return false;
     }
   },
