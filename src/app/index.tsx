@@ -27,14 +27,186 @@ if (Platform.OS !== 'web') {
 const ONBOARDING_STORAGE_KEY = 'KABUT_ONBOARDING_COMPLETED';
 const JAKARTA_CENTER = { latitude: -6.2088, longitude: 106.8456 };
 
+interface SearchPlace {
+  name: string;
+  latitude: number;
+  longitude: number;
+  aliases: string[];
+  type: 'landmark' | 'mall' | 'station' | 'university' | 'hospital' | 'park' | 'region';
+}
+
+// Landmark database for fuzzy matching and abbreviation parsing (Task 1)
+const LANDMARK_DATABASE: SearchPlace[] = [
+  {
+    name: 'Gelora Bung Karno (GBK)',
+    latitude: -6.2183,
+    longitude: 106.8025,
+    aliases: ['gbk', 'gelora bung karno', 'stadion gbk', 'senayan', 'sports complex'],
+    type: 'landmark'
+  },
+  {
+    name: 'Monumen Nasional (Monas)',
+    latitude: -6.1754,
+    longitude: 106.8272,
+    aliases: ['monas', 'monumen nasional', 'jakarta pusat', 'national monument'],
+    type: 'landmark'
+  },
+  {
+    name: 'Universitas Indonesia (UI)',
+    latitude: -6.3606,
+    longitude: 106.8272,
+    aliases: ['ui', 'universitas indonesia', 'depok', 'kampus ui'],
+    type: 'university'
+  },
+  {
+    name: 'Gandaria City (Gancit)',
+    latitude: -6.2442,
+    longitude: 106.7835,
+    aliases: ['gancit', 'gandaria city', 'mall gancit', 'gandaria'],
+    type: 'mall'
+  },
+  {
+    name: 'Central Park Mall (CP)',
+    latitude: -6.1774,
+    longitude: 106.7907,
+    aliases: ['cp', 'central park', 'grogol', 'mall cp', 's-parman'],
+    type: 'mall'
+  },
+  {
+    name: 'Taman Impian Jaya Ancol',
+    latitude: -6.1256,
+    longitude: 106.8436,
+    aliases: ['ancol', 'taman impian jaya ancol', 'dufan', 'pantai ancol'],
+    type: 'park'
+  },
+  {
+    name: 'Kemang, Jakarta Selatan',
+    latitude: -6.2736,
+    longitude: 106.8206,
+    aliases: ['kemang', 'jakarta selatan', 'kemang area', 'bangka'],
+    type: 'region'
+  },
+  {
+    name: 'Stasiun Gambir',
+    latitude: -6.1767,
+    longitude: 106.8306,
+    aliases: ['gambir', 'stasiun gambir', 'gambir station'],
+    type: 'station'
+  },
+  {
+    name: 'Stasiun Sudirman',
+    latitude: -6.2023,
+    longitude: 106.8228,
+    aliases: ['sudirman', 'stasiun sudirman', 'sudirman station', 'dukuh atas'],
+    type: 'station'
+  },
+  {
+    name: 'RSCM (Rumah Sakit Cipto Mangunkusumo)',
+    latitude: -6.1979,
+    longitude: 106.8483,
+    aliases: ['rscm', 'cipto mangunkusumo', 'rumah sakit cipto', 'hospital'],
+    type: 'hospital'
+  },
+  {
+    name: 'Taman Suropati',
+    latitude: -6.2008,
+    longitude: 106.8326,
+    aliases: ['suropati', 'taman suropati', 'menteng park'],
+    type: 'park'
+  },
+  {
+    name: 'Binus University',
+    latitude: -6.2241,
+    longitude: 106.7826,
+    aliases: ['binus', 'bina nusantara', 'kampus binus', 'kemanggisan'],
+    type: 'university'
+  },
+  {
+    name: 'Siloam Hospitals Semanggi',
+    latitude: -6.2243,
+    longitude: 106.8188,
+    aliases: ['siloam', 'siloam hospitals', 'semanggi hospital'],
+    type: 'hospital'
+  },
+  {
+    name: 'Grand Indonesia Mall',
+    latitude: -6.1953,
+    longitude: 106.8203,
+    aliases: ['gi', 'grand indonesia', 'thamrin'],
+    type: 'mall'
+  },
+  {
+    name: 'Plaza Indonesia',
+    latitude: -6.1932,
+    longitude: 106.8217,
+    aliases: ['pi', 'plaza indonesia'],
+    type: 'mall'
+  },
+  {
+    name: 'Kota Tua Jakarta',
+    latitude: -6.1376,
+    longitude: 106.8143,
+    aliases: ['kota tua', 'fatahillah', 'old town'],
+    type: 'landmark'
+  }
+];
+
 const MOCK_LOCATIONS = [
   { name: 'Jakarta Central', latitude: -6.2088, longitude: 106.8456 },
   { name: 'Sudirman Business District', latitude: -6.2196, longitude: 106.8166 },
-  { name: 'Kemang Entertainment Area', latitude: -6.2736, longitude: 106.8206 },
-  { name: 'Kuningan Office Complex', latitude: -6.2244, longitude: 106.8294 },
-  { name: 'Menteng Residential Park', latitude: -6.2012, longitude: 106.8322 },
-  { name: 'Senayan Sports Plaza', latitude: -6.2225, longitude: 106.7997 }
+  { name: 'Kemang Entertainment Area', latitude: -6.2736, longitude: 106.8206 }
 ];
+
+// Fuzzy matching engine scoring system (Task 1)
+const matchSearchQuery = (query: string): SearchPlace[] => {
+  const normalizedQuery = query.toLowerCase().trim();
+  if (normalizedQuery.length < 2) return [];
+
+  const matched = LANDMARK_DATABASE.map(place => {
+    let bestScore = 0;
+
+    // 1. Direct name match
+    if (place.name.toLowerCase() === normalizedQuery) {
+      bestScore = 1.0;
+    } else if (place.name.toLowerCase().startsWith(normalizedQuery)) {
+      bestScore = 0.9;
+    } else if (place.name.toLowerCase().includes(normalizedQuery)) {
+      bestScore = 0.7;
+    }
+
+    // 2. Alias match (abbreviations like "gbk", "cp", "gancit", "ui", etc.)
+    place.aliases.forEach(alias => {
+      if (alias === normalizedQuery) {
+        bestScore = Math.max(bestScore, 1.0);
+      } else if (alias.startsWith(normalizedQuery)) {
+        bestScore = Math.max(bestScore, 0.8);
+      } else if (alias.includes(normalizedQuery)) {
+        bestScore = Math.max(bestScore, 0.6);
+      }
+    });
+
+    // 3. Sequential substring check (fuzzy matching spelling tolerances)
+    let queryIdx = 0;
+    let matchCount = 0;
+    const target = place.name.toLowerCase();
+    for (let i = 0; i < target.length && queryIdx < normalizedQuery.length; i++) {
+      if (target[i] === normalizedQuery[queryIdx]) {
+        matchCount++;
+        queryIdx++;
+      }
+    }
+    if (matchCount === normalizedQuery.length && normalizedQuery.length >= 3) {
+      bestScore = Math.max(bestScore, 0.5);
+    }
+
+    return { place, score: bestScore };
+  });
+
+  return matched
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(item => item.place);
+};
 
 export default function HomeScreen() {
   const scheme = useColorScheme();
@@ -134,20 +306,29 @@ export default function HomeScreen() {
     }
   };
 
-  // Debounced geocoding location search (Task 1)
+  // Debounced geocoding location search (Task 1 Fallback)
   useEffect(() => {
-    if (searchQuery.trim().length <= 2) {
+    if (searchQuery.trim().length <= 1) {
       setSearchResults([]);
       return;
     }
 
+    const localResults = matchSearchQuery(searchQuery);
+
+    // If we have local matches (e.g. abbreviations/landmarks like Monas, GBK, CP), display instantly
+    if (localResults.length >= 3) {
+      setSearchResults(localResults);
+      return;
+    }
+
+    // Trigger geocoding to supplement search query results
     const delayDebounce = setTimeout(async () => {
       setIsSearchingResults(true);
       try {
         const coords = await Location.geocodeAsync(searchQuery);
         if (coords && coords.length > 0) {
-          const results = await Promise.all(
-            coords.slice(0, 4).map(async (coord) => {
+          const apiResults = await Promise.all(
+            coords.slice(0, 3).map(async (coord) => {
               try {
                 const addresses = await Location.reverseGeocodeAsync({
                   latitude: coord.latitude,
@@ -170,7 +351,7 @@ export default function HomeScreen() {
                   };
                 }
               } catch (err) {
-                // Reverse geocoding failed, fallback to coordinate format
+                // Ignore
               }
               return {
                 name: `${searchQuery} (${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)})`,
@@ -179,13 +360,29 @@ export default function HomeScreen() {
               };
             })
           );
-          setSearchResults(results);
+
+          // Merge local and API results, removing duplicates
+          const merged: any[] = [...localResults];
+          apiResults.forEach(apiRes => {
+            const exists = merged.some(
+              localRes =>
+                localRes.name.toLowerCase().includes(apiRes.name.toLowerCase()) ||
+                apiRes.name.toLowerCase().includes(localRes.name.toLowerCase()) ||
+                (Math.abs(localRes.latitude - apiRes.latitude) < 0.001 &&
+                  Math.abs(localRes.longitude - apiRes.longitude) < 0.001)
+            );
+            if (!exists) {
+              merged.push(apiRes);
+            }
+          });
+
+          setSearchResults(merged);
         } else {
-          setSearchResults([]);
+          setSearchResults(localResults);
         }
       } catch (err) {
         console.warn('Geocoding search failed:', err);
-        setSearchResults([]);
+        setSearchResults(localResults);
       } finally {
         setIsSearchingResults(false);
       }
@@ -279,10 +476,10 @@ export default function HomeScreen() {
   const getSearchResults = () => {
     if (Platform.OS === 'web') {
       return searchQuery.trim().length === 0
-        ? MOCK_LOCATIONS.slice(0, 3)
-        : MOCK_LOCATIONS.filter(l => l.name.toLowerCase().includes(searchQuery.toLowerCase()));
+        ? MOCK_LOCATIONS
+        : matchSearchQuery(searchQuery);
     }
-    return searchQuery.trim().length === 0 ? MOCK_LOCATIONS.slice(0, 3) : searchResults;
+    return searchQuery.trim().length === 0 ? MOCK_LOCATIONS : searchResults;
   };
 
   // 1. Render Onboarding slider overlays if not yet complete
