@@ -1,0 +1,60 @@
+import React from 'react';
+import { MaterialIcons } from '@expo/vector-icons';
+import { Colors } from '@/constants/theme';
+import { useColorScheme } from 'react-native';
+
+export type IconName =
+  | 'search'
+  | 'air'
+  | 'warning'
+  | 'report-problem'
+  | 'block'
+  | 'my-location'
+  | 'home'
+  | 'person'
+  | 'arrow-forward'
+  | 'close'
+  | 'arrow-back'
+  | 'info'
+  | 'check';
+
+interface IconProps {
+  name: IconName;
+  size?: number;
+  color?: string;
+  themeColor?: keyof typeof Colors.light;
+}
+
+// Map custom layout-specific icon names to actual MaterialIcon names
+const iconMap: Record<IconName, keyof typeof MaterialIcons.glyphMap> = {
+  'search': 'search',
+  'air': 'air',
+  'warning': 'warning',
+  'report-problem': 'report-problem',
+  'block': 'block',
+  'my-location': 'my-location',
+  'home': 'home',
+  'person': 'person',
+  'arrow-forward': 'arrow-forward',
+  'close': 'close',
+  'arrow-back': 'arrow-back',
+  'info': 'info',
+  'check': 'check',
+};
+
+export function Icon({ name, size = 24, color, themeColor }: IconProps) {
+  const scheme = useColorScheme();
+  const activeScheme = scheme === 'dark' ? 'dark' : 'light';
+  
+  let finalColor = color;
+  if (!finalColor && themeColor) {
+    finalColor = Colors[activeScheme][themeColor] as string;
+  }
+  if (!finalColor) {
+    finalColor = Colors[activeScheme].text as string;
+  }
+
+  const mappedName = iconMap[name] || 'info';
+
+  return <MaterialIcons name={mappedName} size={size} color={finalColor} />;
+}

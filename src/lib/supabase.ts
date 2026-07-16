@@ -1,5 +1,5 @@
 import 'react-native-url-polyfill/auto';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 // SSR Polyfill for Node.js environments lacking global WebSocket support
@@ -83,7 +83,7 @@ class InMemoryStorage {
 
 const nativeMemoryStorage = new InMemoryStorage();
 
-// Storage strategy: Web uses localStorage, Native uses AsyncStorage
+// Storage strategy: Web uses localStorage, Native uses expo-secure-store
 const customStorage = {
   getItem: async (key: string): Promise<string | null> => {
     if (Platform.OS === 'web') {
@@ -92,7 +92,7 @@ const customStorage = {
       }
       return null;
     }
-    return AsyncStorage.getItem(key);
+    return SecureStore.getItemAsync(key);
   },
   setItem: async (key: string, value: string): Promise<void> => {
     if (Platform.OS === 'web') {
@@ -101,7 +101,7 @@ const customStorage = {
       }
       return;
     }
-    await AsyncStorage.setItem(key, value);
+    await SecureStore.setItemAsync(key, value);
   },
   removeItem: async (key: string): Promise<void> => {
     if (Platform.OS === 'web') {
@@ -110,7 +110,7 @@ const customStorage = {
       }
       return;
     }
-    await AsyncStorage.removeItem(key);
+    await SecureStore.deleteItemAsync(key);
   },
 };
 
