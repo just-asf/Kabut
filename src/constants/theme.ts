@@ -1,32 +1,8 @@
-<<<<<<< HEAD
-/**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
- */
-
 import '@/global.css';
-
-=======
-import '@/global.css';
->>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
 import { Platform } from 'react-native';
 
 export const Colors = {
   light: {
-<<<<<<< HEAD
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
-  },
-  dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
-=======
     // Core brand stops
     primary: '#769826',
     secondary: '#A1CB35',
@@ -99,7 +75,6 @@ export const Colors = {
     backgroundSelected: '#242A1D', // Surface 2
     border: 'rgba(255,255,255,0.08)',
     textSecondary: '#B9BDAC',
->>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
   },
 } as const;
 
@@ -107,21 +82,10 @@ export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
 export const Fonts = Platform.select({
   ios: {
-<<<<<<< HEAD
-    /** iOS `UIFontDescriptorSystemDesignDefault` */
-    sans: 'system-ui',
-    /** iOS `UIFontDescriptorSystemDesignSerif` */
-    serif: 'ui-serif',
-    /** iOS `UIFontDescriptorSystemDesignRounded` */
-    rounded: 'ui-rounded',
-    /** iOS `UIFontDescriptorSystemDesignMonospaced` */
-    mono: 'ui-monospace',
-=======
     sans: 'Plus Jakarta Sans',
     serif: 'ui-serif',
     rounded: 'Plus Jakarta Sans',
     mono: 'JetBrains Mono',
->>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
   },
   default: {
     sans: 'normal',
@@ -137,8 +101,6 @@ export const Fonts = Platform.select({
   },
 });
 
-<<<<<<< HEAD
-=======
 export const Typography = {
   display: {
     fontSize: 34,
@@ -187,17 +149,10 @@ export const Typography = {
   },
 };
 
->>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
 export const Spacing = {
   half: 2,
   one: 4,
   two: 8,
-<<<<<<< HEAD
-  three: 16,
-  four: 24,
-  five: 32,
-  six: 64,
-=======
   three: 12,
   four: 16,
   five: 24,
@@ -212,7 +167,6 @@ export const Radius = {
   md: 16,
   lg: 24,
   full: 999,
->>>>>>> 2adb8929331c0ac5a7eae9b2e21552dbed5215b8
 } as const;
 
 export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
