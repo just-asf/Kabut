@@ -10,6 +10,7 @@ import { ReportConfirmModal } from '@/components/layout/ReportConfirmModal';
 import { Icon } from '@/components/ui/Icon';
 import { Button } from '@/components/ui/Button';
 import { useAppStore } from '@/store/useAppStore';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Conditional import of react-native-maps for native platforms
 let MapView: any = null;
@@ -212,6 +213,10 @@ export default function HomeScreen() {
   const scheme = useColorScheme();
   const activeScheme = scheme === 'dark' ? 'dark' : 'light';
   const colors = Colors[activeScheme];
+
+  const insets = useSafeAreaInsets();
+  const bottomOffset = insets.bottom + 16;
+  const topOffset = insets.top + 8;
 
   const {
     isOnboarded,
@@ -561,7 +566,7 @@ export default function HomeScreen() {
       )}
 
       {/* Floating Header UI — Search occupies full available width (side button removed) */}
-      <View style={styles.floatingHeader}>
+      <View style={[styles.floatingHeader, { top: topOffset }]}>
         {/* Glassmorphic Search Bar Input Trigger */}
         <Pressable
           onPress={() => setIsSearching(true)}
@@ -576,7 +581,7 @@ export default function HomeScreen() {
 
       {/* Empty State Card Overlay */}
       {activeCells.length === 0 && showEmptyState && (
-        <View style={[styles.emptyStateCard, { backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
+        <View style={[styles.emptyStateCard, { top: topOffset + 70, backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
           <Icon name="check-circle" size={24} color={colors.primary} />
           <View style={styles.emptyStateTextWrapper}>
             <Text style={[styles.emptyStateTitle, { color: colors.text }]}>No reports nearby</Text>
@@ -595,7 +600,7 @@ export default function HomeScreen() {
         onPress={() => setShowLegend(true)}
         style={({ pressed }) => [
           styles.legendButton,
-          { backgroundColor: activeScheme === 'dark' ? 'rgba(27,31,22,0.8)' : 'rgba(255,255,255,0.8)', borderColor: colors.border },
+          { bottom: bottomOffset, backgroundColor: activeScheme === 'dark' ? 'rgba(27,31,22,0.8)' : 'rgba(255,255,255,0.8)', borderColor: colors.border },
           pressed && { opacity: 0.7 }
         ]}
         accessibilityRole="button"
@@ -609,7 +614,7 @@ export default function HomeScreen() {
         onPress={() => router.push('/air')}
         style={({ pressed }) => [
           styles.airFab,
-          { backgroundColor: colors.primary, borderColor: colors.backgroundElement },
+          { bottom: bottomOffset, backgroundColor: colors.primary, borderColor: colors.backgroundElement },
           pressed && { transform: [{ scale: 0.95 }] }
         ]}
         accessibilityRole="button"
@@ -623,7 +628,7 @@ export default function HomeScreen() {
         onPress={requestLocation}
         style={({ pressed }) => [
           styles.gpsButton,
-          { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+          { bottom: bottomOffset, backgroundColor: colors.backgroundElement, borderColor: colors.border },
           pressed && { opacity: 0.7 }
         ]}
         accessibilityRole="button"
@@ -637,7 +642,7 @@ export default function HomeScreen() {
         onPress={() => setShowReportConfirm(true)}
         style={({ pressed }) => [
           styles.observeFab,
-          { backgroundColor: colors.primary },
+          { bottom: bottomOffset + 76 + 12, backgroundColor: colors.primary },
           pressed && { transform: [{ scale: 0.95 }] },
         ]}
         accessibilityRole="button"
@@ -648,7 +653,7 @@ export default function HomeScreen() {
 
       {/* Full-Screen Search View Overlay */}
       {isSearching && (
-        <View style={[styles.searchOverlay, { backgroundColor: colors.background }]}>
+        <View style={[styles.searchOverlay, { backgroundColor: colors.background, paddingTop: topOffset }]}>
           <View style={styles.searchHeader}>
             <Pressable 
               onPress={() => setIsSearching(false)}
