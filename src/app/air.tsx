@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, Text, Pressable, useColorScheme, BackHandler, ActivityIndicator, Vibration } from 'react-native';
+import { StyleSheet, View, Text, Pressable, useColorScheme, BackHandler, ActivityIndicator, Vibration, Dimensions } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -19,6 +19,8 @@ export default function AirScanScreen() {
   const scheme = useColorScheme();
   const activeScheme = scheme === 'dark' ? 'dark' : 'light';
   const colors = Colors[activeScheme];
+
+  const { height: windowHeight } = Dimensions.get('window');
 
   const {
     observationState,
@@ -277,7 +279,7 @@ export default function AirScanScreen() {
   const showCloseButton = observationState === 'IDLE' || observationState === 'FAILED';
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: colors.background, height: windowHeight }]}>
       {/* Top Bar with Cancel / Back Button */}
       {showCloseButton && (
         <View style={styles.topBar}>

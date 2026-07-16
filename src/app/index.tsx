@@ -25,7 +25,7 @@ if (Platform.OS !== 'web') {
   }
 }
 
-const ONBOARDING_STORAGE_KEY = 'KABUT_ONBOARDING_COMPLETED';
+const ONBOARDING_STORAGE_KEY = 'onboarding_completed';
 const JAKARTA_CENTER = { latitude: -6.2088, longitude: 106.8456 };
 
 interface SearchPlace {
@@ -414,7 +414,7 @@ export default function HomeScreen() {
     return { x, y };
   };
 
-  // Group Supabase observations into 20x20m grid cells for the heatmap layer
+  // Group Supabase observations into 30x30m grid cells for the heatmap layer
   // Updated with new thresholds: Light: 3, Moderate: 7, Elevated: 10, Dense: 15+
   const getHeatmapCells = () => {
     const now = new Date().getTime();
@@ -425,8 +425,9 @@ export default function HomeScreen() {
 
     const cells: { [key: string]: { lat: number; lng: number; count: number } } = {};
     activeObs.forEach(obs => {
-      const cellLat = Math.round(obs.latitude / 0.0002) * 0.0002;
-      const cellLng = Math.round(obs.longitude / 0.0002) * 0.0002;
+      const gridStep = 0.00027; // Approx 30 meters
+      const cellLat = Math.round(obs.latitude / gridStep) * gridStep;
+      const cellLng = Math.round(obs.longitude / gridStep) * gridStep;
       const key = `${cellLat.toFixed(5)},${cellLng.toFixed(5)}`;
       if (!cells[key]) {
         cells[key] = { lat: cellLat, lng: cellLng, count: 0 };
@@ -519,7 +520,7 @@ export default function HomeScreen() {
             <MapCircle
               key={idx}
               center={{ latitude: cell.latitude, longitude: cell.longitude }}
-              radius={15}
+              radius={30}
               fillColor={cell.color + '44'}
               strokeColor={cell.color}
               strokeWidth={2}
@@ -548,8 +549,11 @@ export default function HomeScreen() {
                 style={[
                   styles.heatmapCircle,
                   {
-                    top: pos.y - 75,
-                    left: pos.x - 75,
+                    top: pos.y - 150,
+                    left: pos.x - 150,
+                    width: 300,
+                    height: 300,
+                    borderRadius: 150,
                     backgroundColor: cell.color + '33',
                     borderColor: cell.color,
                   }
