@@ -11,13 +11,17 @@ import { Icon } from '@/components/ui/Icon';
 import { Button } from '@/components/ui/Button';
 import { useAppStore } from '@/store/useAppStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MapView, MapCircle } from '@/components/MapComponent';
+import { MapView, MapCircle, MapMarker } from '@/components/MapComponent';
 import { getGridId } from '@/lib/grid';
 import { supabase } from '@/lib/supabase';
 import { HEATMAP_RADIUS_METERS } from '@/config/heatmap';
+import { shouldShowCircle, getSeverityInfo, getResolvedSeverityLevels } from '@/utils/heatmap';
+import { SeverityBadge } from '@/components/SeverityBadge';
 
 const ONBOARDING_STORAGE_KEY = 'onboarding_completed';
 const JAKARTA_CENTER = { latitude: -6.2088, longitude: 106.8456 };
+
+type UiOverlayState = 'ZOOMED_OUT' | 'LOADING' | 'ERROR' | 'EMPTY' | 'HIDDEN';
 
 interface SearchPlace {
   name: string;
@@ -217,14 +221,20 @@ export default function HomeScreen() {
     location,
     setLocation,
     setLocationError,
+    heatmapState,
   } = useAppStore();
 
   const mapRef = useRef<any>(null);
   const searchInputRef = useRef<TextInput>(null);
+  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+  const lastFetchedRegion = useRef<any>(null);
 
   const [showReportConfirm, setShowReportConfirm] = useState(false);
-  const [reporting, setReporting] = useState(false);
-  const [showEmptyState, setShowEmptyState] = useState(true);
+  const [selectedCell, setSelectedCell] = useState<any | null>(null);
+  const [tracksViewChanges, setTracksViewChanges] = useState(true);
+  const [activeNotification, setActiveNotification] = useState<UiOverlayState | null>(null);
+  const prevHeatmapState = useRef<'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'>('IDLE');
+  const [isMapMoving, setIsMapMoving] = useState(false);
   const [showLegend, setShowLegend] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -238,6 +248,43 @@ export default function HomeScreen() {
     latitudeDelta: 0.015,
     longitudeDelta: 0.015,
   });
+
+  const isZoomedOut = mapRegion.latitudeDelta > 0.06;
+
+  const requestHeatmapForRegion = (region: any, force: boolean = false) => {
+    if (region.latitudeDelta > 0.06) {
+      return; // Suspend fetching if zoomed out too far
+    }
+
+    if (lastFetchedRegion.current && !force) {
+      const latDiff = Math.abs(region.latitude - lastFetchedRegion.current.latitude);
+      const lngDiff = Math.abs(region.longitude - lastFetchedRegion.current.longitude);
+      const latDeltaDiff = Math.abs(region.latitudeDelta - lastFetchedRegion.current.latitudeDelta);
+      
+      const thresholdLat = region.latitudeDelta * 0.3;
+      const thresholdLng = region.longitudeDelta * 0.3;
+      
+      if (latDiff < thresholdLat && lngDiff < thresholdLng && latDeltaDiff < thresholdLat) {
+        return; // Movement insignificant, skip request
+      }
+    }
+
+    lastFetchedRegion.current = region;
+
+    // Expand viewport bounds with 25% buffer
+    const bufferLat = region.latitudeDelta * 0.25;
+    const bufferLng = region.longitudeDelta * 0.25;
+    
+    const bounds = {
+      minLat: region.latitude - (region.latitudeDelta / 2) - bufferLat,
+      maxLat: region.latitude + (region.latitudeDelta / 2) + bufferLat,
+      minLng: region.longitude - (region.longitudeDelta / 2) - bufferLng,
+      maxLng: region.longitude + (region.longitudeDelta / 2) + bufferLng,
+    };
+
+    console.log(`[Viewport] Requesting buffered bounds`, bounds);
+    fetchObservations(bounds);
+  };
 
   // Load onboarding state from storage
   useEffect(() => {
@@ -294,7 +341,7 @@ export default function HomeScreen() {
   // Fetch observations upon onboarding completion
   useEffect(() => {
     if (isOnboarded) {
-      fetchObservations();
+      requestHeatmapForRegion(mapRegion, true);
     }
   }, [isOnboarded]);
 
@@ -309,7 +356,7 @@ export default function HomeScreen() {
         { event: '*', schema: 'public', table: 'grid_status' },
         () => {
           console.log('Realtime grid_status update received, refetching...');
-          fetchObservations();
+          requestHeatmapForRegion(mapRegion, true);
         }
       )
       .subscribe();
@@ -324,6 +371,15 @@ export default function HomeScreen() {
       console.log('[16] Main Screen Rendered');
     }
   }, [isOnboarded, isLoadingOnboarding]);
+
+  // Temporarily enable marker tracking on state updates to allow glyphs to paint, then disable to optimize performance
+  useEffect(() => {
+    setTracksViewChanges(true);
+    const timer = setTimeout(() => {
+      setTracksViewChanges(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [observations]);
 
   const handleOnboardingComplete = async () => {
     try {
@@ -389,28 +445,7 @@ export default function HomeScreen() {
     return () => clearTimeout(delayDebounce);
   }, [searchQuery]);
 
-  // Interaction 1: Observe Confirmation triggers loading, modal auto-closes on success animation finish
-  const handleConfirmReport = async () => {
-    setReporting(true);
-    try {
-      let loc = useAppStore.getState().location;
-      if (!loc) {
-        loc = await useAppStore.getState().startGpsAcquisition();
-      }
-      if (!loc) {
-        Alert.alert('Location Error', 'Unable to determine your current location for reporting.');
-        setReporting(false);
-        return;
-      }
-      const { gridId } = getGridId(loc.coords.latitude, loc.coords.longitude);
-      await useAppStore.getState().submitCleanVote(gridId);
-    } catch (err: any) {
-      console.warn('Clean vote error:', err);
-      Alert.alert('Report Failed', err.message || 'Failed to submit clean vote. Please try again.');
-    } finally {
-      setReporting(false);
-    }
-  };
+
 
   // Helper projection to map GPS coordinates to screen pixel offsets for Web mockup map
   const getCoordinateOffset = (lat: number, lng: number) => {
@@ -422,30 +457,49 @@ export default function HomeScreen() {
   // Render heatmap cells using server-side aggregated grid_status data
   // Color scale thresholds based on calculated grid score: Light: 3, Moderate: 7, Elevated: 10, Dense: 15+
   const getHeatmapCells = () => {
-    const cellsList = observations.map(cell => {
-      let color: string = colors.heatmapLight;
-      let label = 'Light';
-      
+    const cellsList: any[] = [];
+    
+    // Calculate strict visible bounds (no buffer) to cull invisible cells
+    const minLat = mapRegion.latitude - (mapRegion.latitudeDelta / 2);
+    const maxLat = mapRegion.latitude + (mapRegion.latitudeDelta / 2);
+    const minLng = mapRegion.longitude - (mapRegion.longitudeDelta / 2);
+    const maxLng = mapRegion.longitude + (mapRegion.longitudeDelta / 2);
+
+    observations.forEach(cell => {
       const score = cell.score ?? 0;
+      const cleanVotes = cell.clean_votes ?? 0;
       
-      if (score >= 15) {
-        color = colors.heatmapDense;
-        label = 'Dense';
-      } else if (score >= 10) {
-        color = colors.heatmapElevated;
-        label = 'Elevated';
-      } else if (score >= 7) {
-        color = colors.heatmapModerate;
-        label = 'Moderate';
+      if (!shouldShowCircle(score)) {
+        return;
+      }
+
+      if (isZoomedOut) {
+        return; // Don't render cells if zoomed out
+      }
+
+      // Strict viewport culling
+      if (
+        cell.latitude_center < minLat || 
+        cell.latitude_center > maxLat ||
+        cell.longitude_center < minLng ||
+        cell.longitude_center > maxLng
+      ) {
+        return;
       }
       
-      return {
+      const severity = getSeverityInfo(score, colors);
+      
+      cellsList.push({
         latitude: cell.latitude_center,
         longitude: cell.longitude_center,
-        color,
-        count: Math.round(score),
-        label,
-      };
+        color: severity.color,
+        count: score,
+        reports: cell.active_reports ?? 0,
+        cleanVotes: cleanVotes,
+        label: severity.label,
+        icon: severity.icon,
+        severity,
+      });
     });
     console.log('[14] Heatmap Compiled');
     return cellsList;
@@ -471,6 +525,59 @@ export default function HomeScreen() {
     }
   };
 
+  const onRegionChange = () => {
+    if (!isMapMoving) setIsMapMoving(true);
+  };
+
+  const onRegionChangeComplete = (region: any) => {
+    setMapRegion(region);
+    setIsMapMoving(false);
+
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+    }
+
+    debounceTimer.current = setTimeout(() => {
+      requestHeatmapForRegion(region);
+    }, 400);
+  };
+
+  // Pure State Transition Engine for Heatmap Network States
+  useEffect(() => {
+    if (heatmapState === prevHeatmapState.current) return;
+
+    if (heatmapState === 'LOADING') {
+      setActiveNotification('LOADING');
+    } else if (heatmapState === 'ERROR') {
+      setActiveNotification('ERROR');
+    } else if (heatmapState === 'SUCCESS') {
+      if (activeCells.length === 0 && !isZoomedOut) {
+        if (prevHeatmapState.current !== 'SUCCESS') {
+          setActiveNotification('EMPTY');
+        }
+      } else {
+        setActiveNotification(null);
+      }
+    }
+
+    prevHeatmapState.current = heatmapState;
+  }, [heatmapState, isZoomedOut]); // Intentionally omitting activeCells
+
+  // Viewport Lock for Zooming
+  useEffect(() => {
+    if (isZoomedOut) {
+      setActiveNotification('ZOOMED_OUT');
+    } else if (activeNotification === 'ZOOMED_OUT') {
+      setActiveNotification(null);
+    }
+  }, [isZoomedOut]);
+
+  const handleDismissOverlay = () => {
+    setActiveNotification(null);
+  };
+
+  const shouldShowStateCard = !isMapMoving && activeNotification !== null;
+
   const getSearchResults = () => {
     if (Platform.OS === 'web') {
       return searchQuery.trim().length === 0
@@ -495,26 +602,42 @@ export default function HomeScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       
       {/* Interactive Map Layout */}
-      {Platform.OS !== 'web' && MapView ? (
+      {Platform.OS !== 'web' && MapView && MapMarker ? (
         <MapView
           ref={mapRef}
           style={StyleSheet.absoluteFillObject}
           initialRegion={mapRegion}
           showsUserLocation={true}
           showsMyLocationButton={false}
-          onRegionChangeComplete={(r: any) => setMapRegion(r)}
+          onRegionChange={onRegionChange}
+          onRegionChangeComplete={onRegionChangeComplete}
           onMapReady={() => console.log('[15] Map Mounted')}
         >
-          {/* Heatmap Grid Layer Circles */}
+          {/* Heatmap Grid Layer Circles & Accessible Overlay Markers */}
           {activeCells.map((cell, idx) => (
-            <MapCircle
-              key={idx}
-              center={{ latitude: cell.latitude, longitude: cell.longitude }}
-              radius={HEATMAP_RADIUS_METERS}
-              fillColor={cell.color + '44'}
-              strokeColor={cell.color}
-              strokeWidth={2}
-            />
+            <React.Fragment key={idx}>
+              <MapCircle
+                center={{ latitude: cell.latitude, longitude: cell.longitude }}
+                radius={cell.severity.radius}
+                fillColor={cell.severity.fillColor}
+                strokeColor={cell.severity.color}
+                strokeWidth={2}
+              />
+              <MapMarker
+                coordinate={{ latitude: cell.latitude, longitude: cell.longitude }}
+                anchor={{ x: 0.5, y: 0.5 }}
+                tracksViewChanges={tracksViewChanges}
+                accessible={true}
+                accessibilityLabel={`${cell.severity.label} severity area`}
+                accessibilityRole="button"
+                onPress={() => setSelectedCell(cell)}
+                style={{ backgroundColor: 'transparent' }}
+              >
+                <SeverityBadge
+                  severity={cell.severity}
+                />
+              </MapMarker>
+            </React.Fragment>
           ))}
         </MapView>
       ) : (
@@ -534,26 +657,31 @@ export default function HomeScreen() {
             const pos = getCoordinateOffset(cell.latitude, cell.longitude);
             if (pos.x < 0 || pos.x > 380 || pos.y < 50 || pos.y > 600) return null;
             return (
-              <View
+              <Pressable
                 key={idx}
+                onPress={() => setSelectedCell(cell)}
                 style={[
                   styles.heatmapCircle,
                   {
-                    top: pos.y - 150,
-                    left: pos.x - 150,
-                    width: 300,
-                    height: 300,
-                    borderRadius: 150,
-                    backgroundColor: cell.color + '33',
-                    borderColor: cell.color,
+                    top: pos.y - (cell.severity.radius * 3),
+                    left: pos.x - (cell.severity.radius * 3), // Visual approximation
+                    width: cell.severity.radius * 6,
+                    height: cell.severity.radius * 6,
+                    borderRadius: cell.severity.radius * 3,
+                    backgroundColor: cell.severity.fillColor,
+                    borderColor: cell.severity.color,
+                    justifyContent: 'center',
+                    alignItems: 'center',
                   }
                 ]}
+                accessible={true}
+                accessibilityLabel={`${cell.severity.label} severity area`}
+                accessibilityRole="button"
               >
-                <Icon name="air" size={32} color={cell.color} />
-                <View style={[styles.badge, { backgroundColor: colors.backgroundElement }]}>
-                  <Text style={[styles.badgeText, { color: cell.color }]}>{cell.label}</Text>
-                </View>
-              </View>
+                <SeverityBadge
+                  severity={cell.severity}
+                />
+              </Pressable>
             );
           })}
         </View>
@@ -573,15 +701,44 @@ export default function HomeScreen() {
         </Pressable>
       </View>
 
-      {/* Empty State Card Overlay */}
-      {activeCells.length === 0 && showEmptyState && (
+      {/* Dynamic State Card Overlay */}
+      {shouldShowStateCard && (
         <View style={[styles.emptyStateCard, { top: topOffset + 70, backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
-          <Icon name="check-circle" size={24} color={colors.primary} />
-          <View style={styles.emptyStateTextWrapper}>
-            <Text style={[styles.emptyStateTitle, { color: colors.text }]}>No reports nearby</Text>
-            <Text style={[styles.emptyStateDesc, { color: colors.textSecondary }]}>Air looks clear.</Text>
-          </View>
-          <Pressable onPress={() => setShowEmptyState(false)} style={styles.emptyStateClose}>
+          {activeNotification === 'ZOOMED_OUT' ? (
+            <>
+              <Icon name="search" size={24} color={colors.primary} />
+              <View style={styles.emptyStateTextWrapper}>
+                <Text style={[styles.emptyStateTitle, { color: colors.text }]}>Zoom in to view nearby reports</Text>
+                <Text style={[styles.emptyStateDesc, { color: colors.textSecondary }]}>Area is too large.</Text>
+              </View>
+            </>
+          ) : activeNotification === 'LOADING' ? (
+            <>
+              <ActivityIndicator size="small" color={colors.primary} style={{ marginRight: 8 }} />
+              <View style={styles.emptyStateTextWrapper}>
+                <Text style={[styles.emptyStateTitle, { color: colors.text }]}>Loading nearby reports...</Text>
+                <Text style={[styles.emptyStateDesc, { color: colors.textSecondary }]}>Fetching latest data.</Text>
+              </View>
+            </>
+          ) : activeNotification === 'ERROR' ? (
+            <>
+              <Icon name="alert-circle" size={24} color={colors.danger} />
+              <View style={styles.emptyStateTextWrapper}>
+                <Text style={[styles.emptyStateTitle, { color: colors.text }]}>Failed to load</Text>
+                <Text style={[styles.emptyStateDesc, { color: colors.textSecondary }]}>Please try again later.</Text>
+              </View>
+            </>
+          ) : activeNotification === 'EMPTY' ? (
+            <>
+              <Icon name="check-circle" size={24} color={colors.primary} />
+              <View style={styles.emptyStateTextWrapper}>
+                <Text style={[styles.emptyStateTitle, { color: colors.text }]}>No reports nearby</Text>
+                <Text style={[styles.emptyStateDesc, { color: colors.textSecondary }]}>Air looks clear.</Text>
+              </View>
+            </>
+          ) : null}
+
+          <Pressable onPress={handleDismissOverlay} style={styles.emptyStateClose}>
             <Icon name="close" size={16} themeColor="textSecondary" />
           </Pressable>
         </View>
@@ -710,26 +867,19 @@ export default function HomeScreen() {
             <Text style={[styles.legendTitle, { color: colors.text }]}>Map legend</Text>
             
             <View style={styles.legendSwatches}>
-              <View style={styles.legendSwatchRow}>
-                <View style={[styles.swatch, { backgroundColor: '#E4E5DE' }]} />
-                <Text style={[styles.legendLabel, { color: colors.text }]}>Clean (no observations)</Text>
-              </View>
-              <View style={styles.legendSwatchRow}>
-                <View style={[styles.swatch, { backgroundColor: colors.heatmapLight }]} />
-                <Text style={[styles.legendLabel, { color: colors.text }]}>Light (3 observations)</Text>
-              </View>
-              <View style={styles.legendSwatchRow}>
-                <View style={[styles.swatch, { backgroundColor: colors.heatmapModerate }]} />
-                <Text style={[styles.legendLabel, { color: colors.text }]}>Moderate (7 observations)</Text>
-              </View>
-              <View style={styles.legendSwatchRow}>
-                <View style={[styles.swatch, { backgroundColor: colors.heatmapElevated }]} />
-                <Text style={[styles.legendLabel, { color: colors.text }]}>Elevated (10 observations)</Text>
-              </View>
-              <View style={styles.legendSwatchRow}>
-                <View style={[styles.swatch, { backgroundColor: colors.heatmapDense }]} />
-                <Text style={[styles.legendLabel, { color: colors.text }]}>Dense (15+ observations)</Text>
-              </View>
+              {getResolvedSeverityLevels(colors).map((lvl) => (
+                <View 
+                  key={lvl.level} 
+                  style={styles.legendSwatchRow} 
+                  accessible={true} 
+                  accessibilityLabel={`Severity: ${lvl.label} (${lvl.description})`}
+                >
+                  <Icon name={lvl.icon} size={20} color={lvl.color} family="MaterialCommunityIcons" />
+                  <Text style={[styles.legendLabel, { color: colors.text, marginLeft: Spacing.two }]}>
+                    {lvl.label} ({lvl.description})
+                  </Text>
+                </View>
+              ))}
             </View>
 
             <Text style={[styles.legendDesc, { color: colors.textSecondary }]}>
@@ -746,12 +896,50 @@ export default function HomeScreen() {
         </View>
       )}
 
+      {/* Selected Cell Radius Detail Card */}
+      {selectedCell && (
+        <View style={[styles.detailCard, { backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
+          <View style={styles.detailHeader}>
+            <Icon name={selectedCell.icon} size={24} color={selectedCell.color} />
+            <Text style={[styles.detailTitle, { color: colors.text, marginLeft: Spacing.two }]}>
+              {selectedCell.label} Severity Area
+            </Text>
+            <Pressable 
+              onPress={() => setSelectedCell(null)}
+              style={styles.detailCloseButton}
+              accessibilityLabel="Close detail card"
+              accessibilityRole="button"
+            >
+              <Icon name="close" size={20} themeColor="textSecondary" />
+            </Pressable>
+          </View>
+          <View style={styles.detailBody}>
+            <View style={styles.detailRow}>
+              <Text style={[styles.detailLabelText, { color: colors.textSecondary }]}>Reports:</Text>
+              <Text style={[styles.detailValueText, { color: colors.text, fontWeight: '600' }]}>
+                {selectedCell.reports}
+              </Text>
+            </View>
+            <View style={styles.detailRow}>
+              <Text style={[styles.detailLabelText, { color: colors.textSecondary }]}>Clean Votes:</Text>
+              <Text style={[styles.detailValueText, { color: colors.text, fontWeight: '600' }]}>
+                {selectedCell.cleanVotes}
+              </Text>
+            </View>
+            <View style={styles.detailRow}>
+              <Text style={[styles.detailLabelText, { color: colors.textSecondary }]}>Score:</Text>
+              <Text style={[styles.detailValueText, { color: selectedCell.color, fontWeight: '700' }]}>
+                {selectedCell.count.toFixed(1)}
+              </Text>
+            </View>
+          </View>
+        </View>
+      )}
+
       {/* Observe confirmation modal */}
       <ReportConfirmModal
         visible={showReportConfirm}
-        onCancel={reporting ? () => {} : () => setShowReportConfirm(false)}
-        onConfirm={handleConfirmReport}
-        loading={reporting}
+        onCancel={() => setShowReportConfirm(false)}
       />
     </View>
   );
@@ -1037,5 +1225,54 @@ const styles = StyleSheet.create({
     fontSize: Typography.caption.fontSize,
     lineHeight: Typography.body.lineHeight,
     textAlign: 'center',
+  },
+
+  detailCard: {
+    position: 'absolute',
+    bottom: 120,
+    left: Spacing.five,
+    right: Spacing.five,
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    padding: Spacing.four,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  detailHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.three,
+  },
+  detailTitle: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.bodyLg.fontSize,
+    fontWeight: 'bold',
+    flex: 1,
+  },
+  detailCloseButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.full,
+  },
+  detailBody: {
+    gap: Spacing.two,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  detailLabelText: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.body.fontSize,
+  },
+  detailValueText: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.body.fontSize,
   },
 });

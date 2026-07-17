@@ -1,0 +1,12 @@
+/**
+ * Formats a duration in milliseconds into a user-friendly string: "Xm Ys" or "Ys".
+ */
+export function formatRemainingTime(ms: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}

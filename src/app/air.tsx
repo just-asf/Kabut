@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, Text, Pressable, useColorScheme, BackHandler, ActivityIndicator, Vibration, Dimensions } from 'react-native';
+import { StyleSheet, View, Text, Pressable, useColorScheme, BackHandler, ActivityIndicator, Dimensions } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -7,13 +7,28 @@ import Animated, {
   withRepeat,
   withDelay,
   Easing,
-  runOnJS,
+  useReducedMotion,
+  withSequence,
 } from 'react-native-reanimated';
 import { router } from 'expo-router';
 import { Colors, Radius, Spacing, Typography, Fonts } from '@/constants/theme';
 import { Icon } from '@/components/ui/Icon';
 import { Button } from '@/components/ui/Button';
-import { useAppStore, ObservationState } from '@/store/useAppStore';
+import { useAppStore } from '@/store/useAppStore';
+import { triggerSuccessHaptic, triggerFailureHaptic, triggerCooldownHaptic } from '@/utils/haptics';
+import { formatRemainingTime } from '@/utils/cooldown';
+import { getGridId } from '@/lib/grid';
+import { useCooldown } from '@/hooks/useCooldown';
+
+const UPLOAD_MESSAGES = [
+  'Getting your location...',
+  'Checking GPS accuracy...',
+  'Preparing report...',
+  'Uploading report...',
+  'Analyzing nearby reports...',
+  'Updating community map...',
+  'Almost done...',
+];
 
 export default function AirScanScreen() {
   const scheme = useColorScheme();
@@ -25,8 +40,6 @@ export default function AirScanScreen() {
   const {
     observationState,
     setObservationState,
-    scanProgress,
-    setScanProgress,
     locationError,
     startGpsAcquisition,
     submitObservation,
@@ -42,22 +55,37 @@ export default function AirScanScreen() {
   const ringOpacity1 = useSharedValue(0.5);
   const ringScale2 = useSharedValue(0.8);
   const ringOpacity2 = useSharedValue(0.5);
+  
   const buttonScale = useSharedValue(1);
+  const breatheAnim = useSharedValue(1);
+  const shakeOffset = useSharedValue(0);
 
-  const holding = useRef(false);
-  const timer1 = useRef<NodeJS.Timeout | null>(null);
-  const timer2 = useRef<NodeJS.Timeout | null>(null);
-  const timer3 = useRef<NodeJS.Timeout | null>(null);
-  const successTimer = useRef<NodeJS.Timeout | null>(null);
+  const reduceMotion = useReducedMotion();
+
+  const [messageIdx, setMessageIdx] = useState(0);
+
+  const location = useAppStore((state) => state.location);
+  const gridId = location ? getGridId(location.coords.latitude, location.coords.longitude).gridId : null;
+
+  // Consume global Cooldown hook, synced on active gridId changes
+  const { loading: cooldownLoading, formattedTime: cooldownTimeStr, isCooldownActive: isGridCooldownActive } = useCooldown(gridId, 'observation');
 
   // Trigger background GPS acquisition immediately when screen opens
   useEffect(() => {
     startGpsAcquisition();
   }, []);
 
-  // Pulse animations for background rings when IDLE/HOLDING
+  // Breathing animation for button and pulse background rings in IDLE state
   useEffect(() => {
-    if (observationState === 'IDLE' || observationState === 'HOLDING') {
+    if (observationState === 'IDLE' && !isGridCooldownActive && !cooldownLoading && !reduceMotion) {
+      // Idle Breathing
+      breatheAnim.value = withRepeat(
+        withTiming(1.02, { duration: 1500, easing: Easing.inOut(Easing.ease) }),
+        -1,
+        true
+      );
+
+      // Pulse background rings
       ringScale1.value = withRepeat(
         withTiming(1.35, { duration: 2200, easing: Easing.out(Easing.ease) }),
         -1,
@@ -86,22 +114,49 @@ export default function AirScanScreen() {
         )
       );
     } else {
+      breatheAnim.value = withTiming(1, { duration: 200 });
       ringScale1.value = 0.8;
       ringOpacity1.value = 0;
       ringScale2.value = 0.8;
       ringOpacity2.value = 0;
     }
-  }, [observationState, ringOpacity1, ringOpacity2, ringScale1, ringScale2]);
+  }, [observationState, isGridCooldownActive, cooldownLoading, reduceMotion]);
+
+  // Upload progress message rotation
+  useEffect(() => {
+    const isUploading =
+      observationState === 'GPS' ||
+      observationState === 'VALIDATION' ||
+      observationState === 'UPLOAD' ||
+      observationState === 'WAIT_RESPONSE' ||
+      observationState === 'REFRESH_HEATMAP';
+
+    if (isUploading) {
+      setMessageIdx(0);
+      const interval = setInterval(() => {
+        setMessageIdx((prev) => {
+          if (prev < UPLOAD_MESSAGES.length - 1) {
+            return prev + 1;
+          }
+          clearInterval(interval);
+          return prev;
+        });
+      }, 430); // ~3000ms split across 7 steps
+      return () => clearInterval(interval);
+    } else {
+      setMessageIdx(0);
+    }
+  }, [observationState]);
 
   // Handle hardware back button
   useEffect(() => {
     const onBackPress = () => {
-      if (observationState === 'IDLE' || observationState === 'FAILED') {
+      const isIdleOrFailed = observationState === 'IDLE' || observationState === 'FAILED';
+      if (isIdleOrFailed) {
         handleCancel();
         return true;
       }
-      // Block backing out during active validation/upload
-      return true;
+      return true; // Block back button during active upload
     };
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
@@ -116,145 +171,95 @@ export default function AirScanScreen() {
     }, 1800);
   };
 
-  const handlePressIn = () => {
-    if (observationState !== 'IDLE') return;
-    holding.current = true;
+  const triggerShake = () => {
+    shakeOffset.value = 0;
+    shakeOffset.value = withSequence(
+      withTiming(-10, { duration: 50 }),
+      withTiming(10, { duration: 50 }),
+      withTiming(-10, { duration: 50 }),
+      withTiming(10, { duration: 50 }),
+      withTiming(0, { duration: 50 })
+    );
+  };
+
+  const handleTapReport = async () => {
+    if (observationState !== 'IDLE' || isGridCooldownActive || cooldownLoading) return;
+
     setDeniedExplanation(null);
-    setObservationState('HOLDING');
-    buttonScale.value = withTiming(0.95, { duration: 150 });
-    progress.value = withTiming(1, { duration: 3000, easing: Easing.linear }, (finished) => {
-      if (finished) {
-        runOnJS(handleHoldComplete)();
+    progress.value = 0;
+    progress.value = withTiming(1, { duration: 3000, easing: Easing.linear });
+    buttonScale.value = withTiming(0.9, { duration: 150 });
+
+    spawnRipple(colors.primary);
+
+    const startTime = Date.now();
+    const uploadPromise = submitObservation();
+
+    try {
+      const success = await uploadPromise;
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.max(0, 3000 - elapsed);
+
+      if (remaining > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remaining));
       }
-    });
 
-    // Wave 1: Green at 1000ms
-    timer1.current = setTimeout(() => {
-      if (holding.current) spawnRipple('#22C55E');
-    }, 1000);
+      buttonScale.value = withTiming(1, { duration: 150 });
 
-    // Wave 2: Yellow at 2000ms
-    timer2.current = setTimeout(() => {
-      if (holding.current) spawnRipple('#FACC15');
-    }, 2000);
-
-    // Wave 3: Red at 3000ms
-    timer3.current = setTimeout(() => {
-      if (holding.current) spawnRipple('#EF4444');
-    }, 3000);
-  };
-
-  const handlePressOut = () => {
-    if (observationState !== 'HOLDING') return;
-    holding.current = false;
-    clearTimers();
-
-    setObservationState('IDLE');
-    buttonScale.value = withTiming(1, { duration: 150 });
-    progress.value = withTiming(0, { duration: 250 });
-    setScanProgress(0);
-    setActiveRipples([]);
-  };
-
-  const clearTimers = () => {
-    if (timer1.current) clearTimeout(timer1.current);
-    if (timer2.current) clearTimeout(timer2.current);
-    if (timer3.current) clearTimeout(timer3.current);
-    if (successTimer.current) clearTimeout(successTimer.current);
-  };
-
-  const handleHoldComplete = async () => {
-    holding.current = false;
-    buttonScale.value = withTiming(1, { duration: 150 });
-    setScanProgress(1);
-    
-    // Trigger backend upload flow
-    const success = await submitObservation();
-    if (success) {
-      // Trigger success haptic feedback twice (Short vibration -> Pause -> Short vibration)
-      Vibration.vibrate(100);
-      setTimeout(() => {
-        Vibration.vibrate(100);
-      }, 200);
-
-      setObservationState('SUCCESS');
-      // Show success animation for 3.0s then navigate back
-      setTimeout(() => {
-        resetScan();
-        router.back();
-      }, 3000);
-    } else {
-      // Trigger failure haptic feedback once
-      Vibration.vibrate(100);
-
-      // Check if failed due to location permissions
-      // Note: useAppStore updates locationError if permission denied
-      if (useAppStore.getState().locationError) {
-        setDeniedExplanation('Location permission is required to geotag and verify air comfort reports.');
+      if (success) {
+        triggerSuccessHaptic();
+        setObservationState('SUCCESS');
+        setTimeout(() => {
+          resetScan();
+          router.back();
+        }, 3000);
+      } else {
+        triggerFailureHaptic();
+        triggerShake();
+        if (useAppStore.getState().locationError) {
+          setDeniedExplanation(useAppStore.getState().locationError);
+        }
       }
+    } catch (err) {
+      triggerFailureHaptic();
+      triggerShake();
+      buttonScale.value = withTiming(1, { duration: 150 });
     }
   };
 
-  const handleRetry = async () => {
-    setDeniedExplanation(null);
-    const success = await submitObservation();
-    if (success) {
-      // Trigger success haptic feedback twice (Short vibration -> Pause -> Short vibration)
-      Vibration.vibrate(100);
-      setTimeout(() => {
-        Vibration.vibrate(100);
-      }, 200);
-
-      setObservationState('SUCCESS');
-      setTimeout(() => {
-        resetScan();
-        router.back();
-      }, 3000);
-    } else {
-      // Trigger failure haptic feedback once
-      Vibration.vibrate(100);
-    }
+  const handleRetry = () => {
+    handleTapReport();
   };
 
   const handleCancel = () => {
-    clearTimers();
     resetScan();
     router.back();
   };
 
-  // Sync Reanimated shared value to Zustand scan progress state for UI displays
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (observationState === 'HOLDING') {
-        setScanProgress(progress.value);
-      }
-    }, 100);
-    return () => clearInterval(interval);
-  }, [observationState]);
-
   // Status text resolver
   const getStatusText = () => {
-    switch (observationState) {
-      case 'HOLDING':
-        return `Scanning Air Quality... ${Math.round(scanProgress * 100)}%`;
-      case 'GPS':
-        return 'Requesting GPS Location...';
-      case 'VALIDATION':
-        return 'Verifying GPS coordinates accuracy...';
-      case 'UPLOAD':
-        return 'Publishing live air comfort report...';
-      case 'WAIT_RESPONSE':
-        return 'Securing connection to Supabase...';
-      case 'REFRESH_HEATMAP':
-        return 'Updating active heatmap layer...';
-      case 'SUCCESS':
-        return 'Report Published Successfully!';
-      case 'FAILED':
-        return locationError || 'Upload failed. Please check internet connection.';
-      case 'IDLE':
-      default:
-        return 'Press and Hold to scan environment';
+    if (cooldownLoading) {
+      return 'Checking cooldown status...';
     }
+    if (observationState === 'IDLE') {
+      return isGridCooldownActive ? 'Already submitted. Please wait.' : 'Press to scan environment';
+    }
+    if (
+      observationState === 'GPS' ||
+      observationState === 'VALIDATION' ||
+      observationState === 'UPLOAD' ||
+      observationState === 'WAIT_RESPONSE' ||
+      observationState === 'REFRESH_HEATMAP'
+    ) {
+      return UPLOAD_MESSAGES[messageIdx];
+    }
+    if (observationState === 'SUCCESS') {
+      return 'Completed!';
+    }
+    if (observationState === 'FAILED') {
+      return locationError || 'Upload failed. Please check internet connection.';
+    }
+    return 'Press to scan environment';
   };
 
   // Animated styles
@@ -273,16 +278,43 @@ export default function AirScanScreen() {
   }));
 
   const animatedButtonStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: buttonScale.value }],
+    transform: [
+      { scale: breatheAnim.value * buttonScale.value },
+      { translateX: shakeOffset.value },
+    ],
   }));
 
   const showCloseButton = observationState === 'IDLE' || observationState === 'FAILED';
 
+  const getButtonBgColor = () => {
+    if (cooldownLoading || isGridCooldownActive) return colors.neutral200;
+    if (observationState === 'SUCCESS') return '#22C55E';
+    if (observationState === 'FAILED') return colors.danger;
+    return colors.primary;
+  };
+
+  const getButtonIcon = () => {
+    if (observationState === 'SUCCESS') {
+      return <Icon name="check" size={48} color="#ffffff" />;
+    }
+    if (observationState === 'FAILED') {
+      return <Icon name="close" size={48} color="#ffffff" />;
+    }
+    return <Icon name="air" size={48} color={(isGridCooldownActive || cooldownLoading) ? colors.neutral400 : '#ffffff'} />;
+  };
+
+  const isUploadingState =
+    observationState === 'GPS' ||
+    observationState === 'VALIDATION' ||
+    observationState === 'UPLOAD' ||
+    observationState === 'WAIT_RESPONSE' ||
+    observationState === 'REFRESH_HEATMAP';
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background, height: windowHeight }]}>
-      {/* Top Bar with Cancel / Back Button */}
-      {showCloseButton && (
-        <View style={styles.topBar}>
+      {/* Top Bar with Cancel / Back Button — Persistent container to prevent layout shifts */}
+      <View style={styles.topBar}>
+        {showCloseButton ? (
           <Pressable
             onPress={handleCancel}
             style={({ pressed }) => [
@@ -295,22 +327,33 @@ export default function AirScanScreen() {
           >
             <Icon name="arrow-back" size={24} themeColor="text" />
           </Pressable>
-          <Text style={[styles.topTitle, { color: colors.text }]}>Air Report</Text>
-        </View>
-      )}
+        ) : (
+          <View style={[styles.closeButton, { opacity: 0 }]} />
+        )}
+        <Text style={[styles.topTitle, { color: colors.text }]}>Air Report</Text>
+      </View>
 
-      {/* Main Hold Gesture Container */}
+      {/* Main Scanner Container */}
       <View style={styles.centerArea}>
         <View style={styles.brandMarkContainer}>
+          {/* Countdown above the Air button in cooldown */}
+          {observationState === 'IDLE' && isGridCooldownActive && cooldownTimeStr && (
+            <View style={styles.cooldownContainer}>
+              <Text style={[styles.cooldownText, { color: colors.danger }]}>
+                {cooldownTimeStr}
+              </Text>
+            </View>
+          )}
+
           {/* Animated Background Pulsing Rings */}
-          {(observationState === 'IDLE' || observationState === 'HOLDING') && (
+          {(observationState === 'IDLE' || observationState === 'HOLDING') && !isGridCooldownActive && !cooldownLoading && (
             <>
               <Animated.View style={[styles.pulseRing, { backgroundColor: colors.primary }, animatedRingStyle1]} />
               <Animated.View style={[styles.pulseRing, { backgroundColor: colors.primary }, animatedRingStyle2]} />
             </>
           )}
 
-          {/* Ripples triggered by hold milestones */}
+          {/* Ripples triggered by milestones */}
           {activeRipples.map((ripple) => (
             <RippleWave key={ripple.id} color={ripple.color} />
           ))}
@@ -318,25 +361,22 @@ export default function AirScanScreen() {
           {/* Central Interactive Scanning Button */}
           <Animated.View style={[animatedButtonStyle]}>
             <Pressable
-              onPressIn={handlePressIn}
-              onPressOut={handlePressOut}
-              disabled={observationState !== 'IDLE'}
+              onPress={handleTapReport}
+              disabled={observationState !== 'IDLE' || isGridCooldownActive || cooldownLoading}
               style={[
                 styles.scanFab,
                 { 
-                  backgroundColor: observationState === 'SUCCESS' ? '#22C55E' : colors.primary,
-                  opacity: observationState !== 'IDLE' && observationState !== 'HOLDING' && observationState !== 'SUCCESS' ? 0.6 : 1
+                  backgroundColor: getButtonBgColor(),
+                  opacity: observationState !== 'IDLE' && !isUploadingState && observationState !== 'SUCCESS' && !isGridCooldownActive && !cooldownLoading ? 0.6 : 1
                 },
               ]}
               accessibilityRole="button"
-              accessibilityLabel="Hold to report smoke-free status"
+              accessibilityLabel="Tap to scan environment"
             >
-              {observationState === 'SUCCESS' ? (
-                <Icon name="check" size={48} color="#ffffff" />
-              ) : observationState !== 'IDLE' && observationState !== 'HOLDING' ? (
+              {isUploadingState || cooldownLoading ? (
                 <ActivityIndicator size="large" color="#ffffff" />
               ) : (
-                <Icon name="air" size={48} color="#ffffff" />
+                getButtonIcon()
               )}
             </Pressable>
           </Animated.View>
@@ -344,8 +384,8 @@ export default function AirScanScreen() {
 
         {/* Progress Display Section */}
         <View style={styles.progressSection}>
-          {/* Linear Progress Bar for holding */}
-          {observationState === 'HOLDING' && (
+          {/* Linear Progress Bar during upload */}
+          {isUploadingState && (
             <View style={[styles.progressContainer, { backgroundColor: colors.border }]}>
               <Animated.View style={[styles.progressBar, { backgroundColor: colors.primary }, animatedProgressStyle]} />
             </View>
@@ -453,6 +493,17 @@ const styles = StyleSheet.create({
     position: 'relative',
     marginBottom: Spacing.six,
   },
+  cooldownContainer: {
+    position: 'absolute',
+    top: -30,
+    alignSelf: 'center',
+    alignItems: 'center',
+  },
+  cooldownText: {
+    fontFamily: Fonts.sans,
+    fontSize: Typography.bodyLg.fontSize,
+    fontWeight: 'bold',
+  },
   pulseRing: {
     ...StyleSheet.absoluteFillObject,
     borderRadius: Radius.full,
@@ -520,3 +571,4 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
   },
 });
+
