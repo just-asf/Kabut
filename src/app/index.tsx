@@ -12,6 +12,9 @@ import { Button } from '@/components/ui/Button';
 import { useAppStore } from '@/store/useAppStore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MapView, MapCircle } from '@/components/MapComponent';
+import { getGridId } from '@/lib/grid';
+import { supabase } from '@/lib/supabase';
+import { HEATMAP_RADIUS_METERS } from '@/config/heatmap';
 
 const ONBOARDING_STORAGE_KEY = 'onboarding_completed';
 const JAKARTA_CENTER = { latitude: -6.2088, longitude: 106.8456 };
@@ -295,6 +298,27 @@ export default function HomeScreen() {
     }
   }, [isOnboarded]);
 
+  // Subscribe to realtime updates on grid_status changes
+  useEffect(() => {
+    if (!isOnboarded) return;
+    
+    const channel = supabase
+      .channel('grid-status-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'grid_status' },
+        () => {
+          console.log('Realtime grid_status update received, refetching...');
+          fetchObservations();
+        }
+      )
+      .subscribe();
+      
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isOnboarded]);
+
   useEffect(() => {
     if (isOnboarded && !isLoadingOnboarding) {
       console.log('[16] Main Screen Rendered');
@@ -366,11 +390,26 @@ export default function HomeScreen() {
   }, [searchQuery]);
 
   // Interaction 1: Observe Confirmation triggers loading, modal auto-closes on success animation finish
-  const handleConfirmReport = () => {
+  const handleConfirmReport = async () => {
     setReporting(true);
-    setTimeout(() => {
+    try {
+      let loc = useAppStore.getState().location;
+      if (!loc) {
+        loc = await useAppStore.getState().startGpsAcquisition();
+      }
+      if (!loc) {
+        Alert.alert('Location Error', 'Unable to determine your current location for reporting.');
+        setReporting(false);
+        return;
+      }
+      const { gridId } = getGridId(loc.coords.latitude, loc.coords.longitude);
+      await useAppStore.getState().submitCleanVote(gridId);
+    } catch (err: any) {
+      console.warn('Clean vote error:', err);
+      Alert.alert('Report Failed', err.message || 'Failed to submit clean vote. Please try again.');
+    } finally {
       setReporting(false);
-    }, 1200);
+    }
   };
 
   // Helper projection to map GPS coordinates to screen pixel offsets for Web mockup map
@@ -380,55 +419,34 @@ export default function HomeScreen() {
     return { x, y };
   };
 
-  // Group Supabase observations into 30x30m grid cells for the heatmap layer
-  // Updated with new thresholds: Light: 3, Moderate: 7, Elevated: 10, Dense: 15+
+  // Render heatmap cells using server-side aggregated grid_status data
+  // Color scale thresholds based on calculated grid score: Light: 3, Moderate: 7, Elevated: 10, Dense: 15+
   const getHeatmapCells = () => {
-    const now = new Date().getTime();
-    const activeObs = observations.filter(obs => {
-      if (!obs || !obs.created_at || obs.latitude === undefined || obs.latitude === null || obs.longitude === undefined || obs.longitude === null) {
-        return false;
+    const cellsList = observations.map(cell => {
+      let color: string = colors.heatmapLight;
+      let label = 'Light';
+      
+      const score = cell.score ?? 0;
+      
+      if (score >= 15) {
+        color = colors.heatmapDense;
+        label = 'Dense';
+      } else if (score >= 10) {
+        color = colors.heatmapElevated;
+        label = 'Elevated';
+      } else if (score >= 7) {
+        color = colors.heatmapModerate;
+        label = 'Moderate';
       }
-      const ageMs = now - new Date(obs.created_at).getTime();
-      return ageMs < 60 * 60 * 1000; // 60 minutes time-decay
+      
+      return {
+        latitude: cell.latitude_center,
+        longitude: cell.longitude_center,
+        color,
+        count: Math.round(score),
+        label,
+      };
     });
-
-    const cells: { [key: string]: { lat: number; lng: number; count: number } } = {};
-    activeObs.forEach(obs => {
-      const gridStep = 0.00027; // Approx 30 meters
-      const cellLat = Math.round(obs.latitude / gridStep) * gridStep;
-      const cellLng = Math.round(obs.longitude / gridStep) * gridStep;
-      const key = `${cellLat.toFixed(5)},${cellLng.toFixed(5)}`;
-      if (!cells[key]) {
-        cells[key] = { lat: cellLat, lng: cellLng, count: 0 };
-      }
-      cells[key].count += 1;
-    });
-
-    const cellsList = Object.values(cells)
-      .filter(cell => cell.count >= 3) // Only render if count >= 3 (Light threshold)
-      .map(cell => {
-        let color: string = colors.heatmapLight;
-        let label = 'Light';
-        
-        if (cell.count >= 15) {
-          color = colors.heatmapDense;
-          label = 'Dense';
-        } else if (cell.count >= 10) {
-          color = colors.heatmapElevated;
-          label = 'Elevated';
-        } else if (cell.count >= 7) {
-          color = colors.heatmapModerate;
-          label = 'Moderate';
-        }
-        
-        return {
-          latitude: cell.lat,
-          longitude: cell.lng,
-          color,
-          count: cell.count,
-          label,
-        };
-      });
     console.log('[14] Heatmap Compiled');
     return cellsList;
   };
@@ -492,7 +510,7 @@ export default function HomeScreen() {
             <MapCircle
               key={idx}
               center={{ latitude: cell.latitude, longitude: cell.longitude }}
-              radius={30}
+              radius={HEATMAP_RADIUS_METERS}
               fillColor={cell.color + '44'}
               strokeColor={cell.color}
               strokeWidth={2}

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import * as Location from 'expo-location';
-import { supabase } from '@/lib/supabase';
+import { supabase, parseFunctionError } from '@/lib/supabase';
 
 export type ObservationState =
   | 'IDLE'
@@ -16,13 +16,13 @@ export type ObservationState =
 interface AppStore {
   isOnboarded: boolean;
   setIsOnboarded: (val: boolean) => void;
-  
+
   observationState: ObservationState;
   setObservationState: (state: ObservationState) => void;
-  
+
   scanProgress: number;
   setScanProgress: (progress: number) => void;
-  
+
   location: Location.LocationObject | null;
   setLocation: (loc: Location.LocationObject | null) => void;
   locationError: string | null;
@@ -33,6 +33,7 @@ interface AppStore {
   fetchObservations: () => Promise<void>;
   startGpsAcquisition: () => Promise<Location.LocationObject | null>;
   submitObservation: () => Promise<boolean>;
+  submitCleanVote: (gridId: string) => Promise<boolean>;
   resetScan: () => void;
 }
 
@@ -69,9 +70,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     console.log('[12] Fetch Observations Started');
     try {
       const { data, error } = await supabase
-        .from('observations')
+        .from('grid_status')
         .select('*')
-        .order('created_at', { ascending: false });
+        .gt('score', 0);
       if (error) throw error;
       set({ observations: data || [] });
     } catch (err) {
@@ -84,7 +85,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     try {
       const { status } = await Location.getForegroundPermissionsAsync();
       if (status !== 'granted') return null;
-      
+
       const loc = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
@@ -98,94 +99,193 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   submitObservation: async () => {
     set({ observationState: 'GPS' });
-    
+
     try {
-      // 1. Check internet connectivity
+      // 1. Internet check
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 3000);
-        await fetch('https://dvbgfjjzggnlrixsqkss.supabase.co', { method: 'HEAD', signal: controller.signal });
+
+        await fetch(
+          'https://dvbgfjjzggnlrixsqkss.supabase.co',
+          {
+            method: 'HEAD',
+            signal: controller.signal,
+          }
+        );
+
         clearTimeout(timeoutId);
-      } catch (err) {
-        set({ 
-          locationError: 'Network connection failed. Verify your device is connected to the Internet.', 
-          observationState: 'FAILED' 
+      } catch {
+        set({
+          locationError:
+            'Network connection failed. Verify your device is connected to the Internet.',
+          observationState: 'FAILED',
         });
+
         return false;
       }
 
-      // 2. Check anonymous session
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (!sessionData.session) {
-        const { error: authError } = await supabase.auth.signInAnonymously();
-        if (authError) {
-          console.warn('Supabase anonymous sign-in failed:', authError.message);
+      // 2. Authentication
+      let {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        console.log('[AUTH] No session found. Signing in anonymously...');
+
+        const { data, error } =
+          await supabase.auth.signInAnonymously();
+
+        console.log('[AUTH] Sign in result:', data);
+        console.log('[AUTH] Sign in error:', error);
+
+        if (error) {
+          console.error('[AUTH] Anonymous sign in failed', error);
+
+          set({
+            observationState: 'FAILED',
+            locationError: error.message,
+          });
+
+          return false;
+        }
+
+        const verify =
+          await supabase.auth.getSession();
+
+        session = verify.data.session;
+
+        console.log('[AUTH] Session after login');
+        console.log(session);
+
+        if (!session) {
+          console.error('[AUTH] Session is still null');
+
+          set({
+            observationState: 'FAILED',
+            locationError:
+              'Unable to establish authenticated session.',
+          });
+
+          return false;
         }
       }
 
-      // 3. Acquire GPS (reuse background position or request it now)
+      // 3. GPS
       let loc = get().location;
+
       if (!loc) {
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        const { status } =
+          await Location.requestForegroundPermissionsAsync();
+
         if (status !== 'granted') {
-          set({ 
-            locationError: 'Geotagging failed: Location permission was denied.', 
-            observationState: 'FAILED' 
+          set({
+            observationState: 'FAILED',
+            locationError:
+              'Location permission denied.',
           });
+
           return false;
         }
-        loc = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
+
+        loc =
+          await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+
         set({ location: loc });
       }
 
-      // 4. Anti-spam & coordinates sanity check validation
-      set({ observationState: 'VALIDATION' });
-      if (!loc || Math.abs(loc.coords.latitude) > 90 || Math.abs(loc.coords.longitude) > 180) {
-        set({ 
-          locationError: 'Validation failed: Invalid GPS coordinate parameters.', 
-          observationState: 'FAILED' 
+      // 4. Validation
+      set({
+        observationState: 'VALIDATION',
+      });
+
+      if (
+        !loc ||
+        Math.abs(loc.coords.latitude) > 90 ||
+        Math.abs(loc.coords.longitude) > 180
+      ) {
+        set({
+          observationState: 'FAILED',
+          locationError:
+            'Invalid GPS coordinates.',
+        });
+
+        return false;
+      }
+
+      // 5. Upload
+      set({
+        observationState: 'UPLOAD',
+      });
+
+      const { data, error } =
+        await supabase.functions.invoke(
+          'submit-observation',
+          {
+            body: {
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+            },
+          }
+        );
+
+      if (error) {
+        const parsed = await parseFunctionError(error, 'submit-observation');
+        set({
+          observationState: 'FAILED',
+          locationError: parsed.message,
         });
         return false;
       }
-      await new Promise((resolve) => setTimeout(resolve, 300));
 
-      // 5. Upload to Supabase
-      set({ observationState: 'UPLOAD' });
-      const insertPromise = supabase
-        .from('observations')
-        .insert([
-          {
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-            status: 'smoke-free',
-            created_at: new Date().toISOString(),
-          }
-        ]);
+      // 6. Refresh
+      set({
+        observationState: 'REFRESH_HEATMAP',
+      });
 
-      // Handle insert and fetch observations asynchronously in the background
-      (async () => {
-        try {
-          const { error } = await insertPromise;
-          if (error) {
-            console.error('Background upload failed:', error.message);
-          }
-          await get().fetchObservations();
-        } catch (err: any) {
-          console.error('Background upload exception:', err);
-        }
-      })();
+      await get().fetchObservations();
 
-      set({ observationState: 'WAIT_RESPONSE' });
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      
-      set({ observationState: 'REFRESH_HEATMAP' });
+      set({
+        observationState: 'SUCCESS',
+      });
+
+      console.log('Upload Success');
+
       return true;
     } catch (err) {
-      console.error('Failed to submit observation:', err);
-      set({ observationState: 'FAILED' });
+      console.error('submitObservation exception');
+      console.error(err);
+
+      const parsed = await parseFunctionError(err, 'submit-observation');
+      set({
+        observationState: 'FAILED',
+        locationError: parsed.message,
+      });
+
       return false;
+    }
+  },
+
+  submitCleanVote: async (gridId: string) => {
+    try {
+      const { error } = await supabase.functions.invoke('submit-clean-vote', {
+        body: { grid_id: gridId },
+      });
+      if (error) {
+        const parsed = await parseFunctionError(error, 'submit-clean-vote');
+        throw new Error(parsed.message);
+      }
+      await get().fetchObservations();
+      return true;
+    } catch (err: any) {
+      console.warn('Failed to submit clean vote:', err);
+      if (err.name === 'FunctionsHttpError' || err.context) {
+        const parsed = await parseFunctionError(err, 'submit-clean-vote');
+        throw new Error(parsed.message);
+      }
+      throw err;
     }
   },
 
