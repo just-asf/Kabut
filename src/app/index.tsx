@@ -469,7 +469,7 @@ export default function HomeScreen() {
       const score = cell.score ?? 0;
       const cleanVotes = cell.clean_votes ?? 0;
       
-      if (!shouldShowCircle(score)) {
+      if (!shouldShowCircle(score, cleanVotes)) {
         return;
       }
 

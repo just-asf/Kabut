@@ -9,6 +9,7 @@ import { Stack } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { GlobalErrorProvider } from '@/providers/GlobalErrorProvider';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -21,20 +22,22 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <SafeAreaProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <AnimatedSplashOverlay />
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen 
-            name="air" 
-            options={{
-              animation: 'fade',
-              animationDuration: 400,
-            }}
-          />
-        </Stack>
-      </ThemeProvider>
-    </SafeAreaProvider>
+    <GlobalErrorProvider>
+      <SafeAreaProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <AnimatedSplashOverlay />
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="index" />
+            <Stack.Screen 
+              name="air" 
+              options={{
+                animation: 'fade',
+                animationDuration: 400,
+              }}
+            />
+          </Stack>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </GlobalErrorProvider>
   );
 }
