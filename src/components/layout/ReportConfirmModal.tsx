@@ -1,24 +1,37 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, Modal, Pressable, useColorScheme, Animated, Vibration } from 'react-native';
+import { StyleSheet, View, Text, Modal, Pressable, useColorScheme, Animated, ActivityIndicator } from 'react-native';
 import { Colors, Radius, Spacing, Typography, Fonts } from '@/constants/theme';
 import { Icon } from '@/components/ui/Icon';
 import { Button } from '@/components/ui/Button';
+import { useAppStore } from '@/store/useAppStore';
+import { getGridId } from '@/lib/grid';
+import { triggerSuccessHaptic, triggerFailureHaptic, triggerCooldownHaptic } from '@/utils/haptics';
+import { formatRemainingTime } from '@/utils/cooldown';
+import { useCooldown } from '@/hooks/useCooldown';
 
 interface ReportConfirmModalProps {
   visible: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
-  loading?: boolean;
 }
 
-export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = false }: ReportConfirmModalProps) {
+export function ReportConfirmModal({ visible, onCancel }: ReportConfirmModalProps) {
   const scheme = useColorScheme();
   const activeScheme = scheme === 'dark' ? 'dark' : 'light';
   const colors = Colors[activeScheme];
 
-  const [status, setStatus] = useState<'CONFIRM' | 'LOADING' | 'SUCCESS'>('CONFIRM');
+  const location = useAppStore((state) => state.location);
+  const gridId = location ? getGridId(location.coords.latitude, location.coords.longitude).gridId : null;
+
+  // Consume global Cooldown Hook, synced on visible gridId changes
+  const { loading: cooldownLoading, formattedTime: timeLeftStr, isCooldownActive } = useCooldown(visible ? gridId : null, 'cleanVote');
+  const confirmDisabled = cooldownLoading || isCooldownActive;
+
+  const [status, setStatus] = useState<'CONFIRM' | 'LOADING' | 'SUCCESS' | 'COOLDOWN' | 'FAILURE'>('CONFIRM');
+  const [cooldownRemaining, setCooldownRemaining] = useState('');
+
   const scaleAnim = useRef(new Animated.Value(0)).current;
 
+  // Reset modal state on open
   useEffect(() => {
     if (visible) {
       setStatus('CONFIRM');
@@ -26,30 +39,9 @@ export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = fal
     }
   }, [visible]);
 
+  // Spring animation for success/failure/cooldown transitions
   useEffect(() => {
-    if (visible) {
-      if (loading) {
-        setStatus('LOADING');
-      } else if (status === 'LOADING') {
-        setStatus('SUCCESS');
-        
-        // Trigger success haptic vibration twice (Short -> Pause -> Short)
-        Vibration.vibrate(100);
-        setTimeout(() => {
-          Vibration.vibrate(100);
-        }, 200);
-
-        // Auto dismiss after 3 seconds
-        const timer = setTimeout(() => {
-          onCancel();
-        }, 3000);
-        return () => clearTimeout(timer);
-      }
-    }
-  }, [loading, visible]);
-
-  useEffect(() => {
-    if (status === 'SUCCESS') {
+    if (status === 'SUCCESS' || status === 'COOLDOWN' || status === 'FAILURE') {
       Animated.spring(scaleAnim, {
         toValue: 1,
         tension: 50,
@@ -59,10 +51,39 @@ export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = fal
     }
   }, [status]);
 
+  const handleConfirm = async () => {
+    if (!gridId) return;
+    setStatus('LOADING');
+    try {
+      const success = await useAppStore.getState().submitCleanVote(gridId);
+      if (success) {
+        setStatus('SUCCESS');
+        triggerSuccessHaptic();
+        setTimeout(() => {
+          onCancel();
+        }, 3000);
+      }
+    } catch (err: any) {
+      console.warn('Clean vote error:', err);
+      const cooldowns = useAppStore.getState().cleanVoteCooldowns;
+      const exp = cooldowns[gridId];
+      if (exp) {
+        const diff = exp - Date.now();
+        setCooldownRemaining(formatRemainingTime(diff > 0 ? diff : 3600 * 1000));
+        setStatus('COOLDOWN');
+        triggerCooldownHaptic();
+        setTimeout(() => {
+          onCancel();
+        }, 3000);
+      } else {
+        setStatus('FAILURE');
+        triggerFailureHaptic();
+      }
+    }
+  };
+
   const handleBackdropPress = () => {
-    if (status === 'SUCCESS') {
-      onCancel(); // Allow user to tap anywhere to dismiss success animation early
-    } else if (status === 'CONFIRM') {
+    if (status !== 'LOADING') {
       onCancel();
     }
   };
@@ -78,43 +99,45 @@ export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = fal
         style={styles.backdrop} 
         onPress={handleBackdropPress}
         accessible={true}
-        accessibilityLabel={status === 'SUCCESS' ? "Tap to close success confirmation" : "Dismiss report confirm dialog"}
+        accessibilityLabel={
+          status === 'SUCCESS'
+            ? "Clean vote submitted successfully"
+            : status === 'COOLDOWN'
+            ? "Already submitted cooldown warning"
+            : "Clean vote confirmation dialog"
+        }
         accessibilityRole="button"
       >
-        {/* Modal content card */}
         <Pressable 
           style={[styles.modalCard, { backgroundColor: colors.backgroundElement }]}
           accessible={true}
           accessibilityRole="alert"
-          onPress={(e) => {
-            e.stopPropagation(); // Prevent dismissing when clicking card content itself (unless in success state)
-            if (status === 'SUCCESS') {
-              onCancel(); // In success state, tapping anywhere (even on the card) dismisses it
-            }
-          }}
+          onPress={(e) => e.stopPropagation()}
         >
-          {status === 'SUCCESS' ? (
-            <View style={styles.content}>
-              <Animated.View style={[styles.iconContainer, { transform: [{ scale: scaleAnim }] }]}>
-                <Icon name="check-circle" size={56} color={colors.primary} />
-              </Animated.View>
-              <Text style={[styles.title, { color: colors.text, marginTop: Spacing.three }]}>
-                Observation confirmed
-              </Text>
-              <Text style={[styles.bodyText, { color: colors.textSecondary, marginTop: Spacing.two }]}>
-                Your report has been successfully recorded. Thank you for helping keep the air smoke-free!
-              </Text>
-            </View>
-          ) : (
+          {status === 'CONFIRM' && (
             <>
               <View style={styles.content}>
                 <View style={styles.iconContainer} accessible={false}>
                   <Icon name="warning" size={48} color={colors.primary} />
                 </View>
                 <Text style={[styles.title, { color: colors.text }]}>Are you sure?</Text>
-                <Text style={[styles.bodyText, { color: colors.textSecondary }]}>
-                  You're about to report that this place is currently smoke-free. Your report will help update the live air status for other users.
-                </Text>
+                
+                {cooldownLoading ? (
+                  <View style={{ alignItems: 'center', marginTop: Spacing.two }}>
+                    <ActivityIndicator size="small" color={colors.primary} style={{ marginBottom: Spacing.two }} />
+                    <Text style={[styles.bodyText, { color: colors.textSecondary }]}>
+                      Checking cooldown status...
+                    </Text>
+                  </View>
+                ) : isCooldownActive ? (
+                  <Text style={[styles.bodyText, { color: colors.danger, fontWeight: 'bold' }]}>
+                    Already submitted. Try again in: {timeLeftStr}
+                  </Text>
+                ) : (
+                  <Text style={[styles.bodyText, { color: colors.textSecondary }]}>
+                    You're about to report that this place is currently smoke-free. Your report will help update the live air status for other users.
+                  </Text>
+                )}
               </View>
               
               <View style={styles.buttonRow}>
@@ -123,7 +146,6 @@ export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = fal
                     label="Cancel" 
                     onPress={onCancel} 
                     variant="outlined" 
-                    disabled={status === 'LOADING'}
                     accessibilityLabel="Cancel reporting smoke-free zone"
                     style={styles.pillButton}
                   />
@@ -131,16 +153,79 @@ export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = fal
                 <View style={styles.buttonWrapper}>
                   <Button 
                     label="Confirm" 
-                    onPress={onConfirm} 
+                    onPress={handleConfirm} 
                     variant="filled" 
-                    disabled={status === 'LOADING'}
-                    loading={status === 'LOADING'}
+                    disabled={confirmDisabled}
                     accessibilityLabel="Confirm reporting smoke-free zone"
                     style={styles.pillButton}
                   />
                 </View>
               </View>
             </>
+          )}
+
+          {status === 'LOADING' && (
+            <View style={styles.content}>
+              <ActivityIndicator size="large" color={colors.primary} style={{ marginBottom: Spacing.four }} />
+              <Text style={[styles.title, { color: colors.text }]}>Submitting Vote...</Text>
+              <Text style={[styles.bodyText, { color: colors.textSecondary }]}>
+                Please wait while we register your smoke-free report.
+              </Text>
+            </View>
+          )}
+
+          {status === 'SUCCESS' && (
+            <View style={styles.content}>
+              <Animated.View style={[styles.iconContainer, { transform: [{ scale: scaleAnim }] }]}>
+                <Icon name="check-circle" size={56} color={colors.primary} />
+              </Animated.View>
+              <Text style={[styles.title, { color: colors.text, marginTop: Spacing.three }]}>
+                ✓
+              </Text>
+              <Text style={[styles.bodyText, { color: colors.text, marginTop: Spacing.two, fontWeight: '600' }]}>
+                Clean vote submitted successfully.
+              </Text>
+            </View>
+          )}
+
+          {status === 'COOLDOWN' && (
+            <View style={styles.content}>
+              <Animated.View style={[styles.iconContainer, { transform: [{ scale: scaleAnim }] }]}>
+                <Icon name="close" size={56} color={colors.danger} />
+              </Animated.View>
+              <Text style={[styles.title, { color: colors.danger, marginTop: Spacing.three }]}>
+                Red X
+              </Text>
+              <Text style={[styles.bodyText, { color: colors.text, marginTop: Spacing.two, fontWeight: '600' }]}>
+                Already submitted.
+              </Text>
+              <Text style={[styles.bodyText, { color: colors.textSecondary, marginTop: Spacing.one }]}>
+                Try again in: {cooldownRemaining}
+              </Text>
+            </View>
+          )}
+
+          {status === 'FAILURE' && (
+            <View style={styles.content}>
+              <Animated.View style={[styles.iconContainer, { transform: [{ scale: scaleAnim }] }]}>
+                <Icon name="close" size={56} color={colors.danger} />
+              </Animated.View>
+              <Text style={[styles.title, { color: colors.danger, marginTop: Spacing.three }]}>
+                Red X
+              </Text>
+              <Text style={[styles.bodyText, { color: colors.text, marginTop: Spacing.two, fontWeight: '600' }]}>
+                Unexpected error.
+              </Text>
+              <Text style={[styles.bodyText, { color: colors.textSecondary, marginTop: Spacing.one }]}>
+                Please try again later.
+              </Text>
+              <Button
+                label="Close"
+                onPress={onCancel}
+                variant="outlined"
+                style={[styles.pillButton, { marginTop: Spacing.four, width: 120 }]}
+              />
+            </View>
           )}
         </Pressable>
       </Pressable>
@@ -151,7 +236,7 @@ export function ReportConfirmModal({ visible, onCancel, onConfirm, loading = fal
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(28,31,22,0.4)', // Dark semi-translucent backdrop
+    backgroundColor: 'rgba(28,31,22,0.4)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: Spacing.four,
@@ -203,3 +288,5 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
   },
 });
+
+
