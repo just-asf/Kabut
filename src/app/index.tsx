@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MapView, MapCircle } from '@/components/MapComponent';
 import { getGridId } from '@/lib/grid';
 import { supabase } from '@/lib/supabase';
+import { HEATMAP_RADIUS_METERS } from '@/config/heatmap';
 
 const ONBOARDING_STORAGE_KEY = 'onboarding_completed';
 const JAKARTA_CENTER = { latitude: -6.2088, longitude: 106.8456 };
@@ -402,12 +403,10 @@ export default function HomeScreen() {
         return;
       }
       const { gridId } = getGridId(loc.coords.latitude, loc.coords.longitude);
-      const success = await useAppStore.getState().submitCleanVote(gridId);
-      if (!success) {
-        Alert.alert('Report Failed', 'Failed to submit clean vote. Please try again.');
-      }
-    } catch (err) {
+      await useAppStore.getState().submitCleanVote(gridId);
+    } catch (err: any) {
       console.warn('Clean vote error:', err);
+      Alert.alert('Report Failed', err.message || 'Failed to submit clean vote. Please try again.');
     } finally {
       setReporting(false);
     }
@@ -511,7 +510,7 @@ export default function HomeScreen() {
             <MapCircle
               key={idx}
               center={{ latitude: cell.latitude, longitude: cell.longitude }}
-              radius={30}
+              radius={HEATMAP_RADIUS_METERS}
               fillColor={cell.color + '44'}
               strokeColor={cell.color}
               strokeWidth={2}

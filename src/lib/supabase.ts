@@ -257,3 +257,94 @@ export async function checkSupabaseConnection(): Promise<ConnectionTestResult> {
     return result;
   }
 }
+
+export interface ParsedFunctionError {
+  status: number;
+  message: string;
+  code: string;
+}
+
+/**
+ * Safely parses and logs errors returned by Supabase Edge Functions.
+ */
+export async function parseFunctionError(error: any, functionName: string): Promise<ParsedFunctionError> {
+  let status = 500;
+  let code = 'SERVER_ERROR';
+  let bodyText = '';
+  let requestId: string | null = null;
+  let statusText = 'Unknown Error';
+
+  if (error && typeof error === 'object') {
+    const ctx = error.context;
+    if (ctx && typeof ctx === 'object') {
+      status = ctx.status || status;
+      statusText = ctx.statusText || statusText;
+      if (ctx.headers && typeof ctx.headers.get === 'function') {
+        requestId = ctx.headers.get('x-sb-loading-id') || ctx.headers.get('x-request-id') || ctx.headers.get('sb-request-id');
+      }
+      
+      try {
+        const clone = typeof ctx.clone === 'function' ? ctx.clone() : ctx;
+        bodyText = await clone.text();
+      } catch (e) {
+        bodyText = '';
+      }
+    } else {
+      status = error.status || status;
+      bodyText = error.message || '';
+    }
+  }
+
+  // Parse error message from body if it is JSON
+  let errorMsgFromBody = '';
+  try {
+    const parsed = JSON.parse(bodyText);
+    if (parsed && typeof parsed === 'object') {
+      errorMsgFromBody = parsed.error || parsed.message || '';
+    }
+  } catch {}
+
+  // Map messages based on status and body content
+  let message = 'Server error.\nPlease try again later.';
+  
+  if (status === 400) {
+    message = 'Invalid request.';
+    code = 'BAD_REQUEST';
+  } else if (status === 401) {
+    message = 'Authentication failed. Please try again.';
+    code = 'UNAUTHORIZED';
+  } else if (status === 403) {
+    message = 'You do not have permission to perform this action.';
+    code = 'FORBIDDEN';
+  } else if (status === 404) {
+    message = 'Service unavailable.';
+    code = 'NOT_FOUND';
+  } else if (status === 409 || errorMsgFromBody === 'Already submitted' || errorMsgFromBody === 'Already voted') {
+    message = 'You have already submitted an observation in this area.\nPlease wait before submitting another report.';
+    code = 'COOLDOWN';
+  } else if (status === 429) {
+    message = 'Too many requests.\nPlease wait before trying again.';
+    code = 'TOO_MANY_REQUESTS';
+  } else if (status >= 500) {
+    message = 'Server error.\nPlease try again later.';
+    code = 'SERVER_ERROR';
+  }
+
+  // Forensic Logging
+  console.error(`[Edge Function]
+Function:
+${functionName}
+
+Status:
+${status} ${statusText}${requestId ? `\n\nRequest ID:\n${requestId}` : ''}
+
+Body:
+${bodyText || JSON.stringify({ error: error.message || 'Unknown error' })}`);
+
+  return {
+    status,
+    message,
+    code
+  };
+}
+
