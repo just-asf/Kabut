@@ -5,10 +5,12 @@ export const MIN_CLEAN_THRESHOLD = 2;
 /**
  * Determines whether a heatmap circle should be rendered on the map.
  * The score is computed by the backend and served as the single source of truth.
- * The circle disappears when score is 0.
+ * The circle disappears when score is 0 AND cleanVotes >= MIN_CLEAN_THRESHOLD.
  */
-export function shouldShowCircle(score: number): boolean {
-  return score > 0;
+export function shouldShowCircle(score: number, cleanVotes: number): boolean {
+  if (score > 0) return true;
+  if (cleanVotes < MIN_CLEAN_THRESHOLD) return true;
+  return false;
 }
 
 export type SeverityLevel = 'very_low' | 'light' | 'moderate' | 'elevated' | 'dense';

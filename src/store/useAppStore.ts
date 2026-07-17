@@ -1,8 +1,12 @@
 import { create } from 'zustand';
 import * as Location from 'expo-location';
+import * as Device from 'expo-device';
+import { Platform } from 'react-native';
+import { getDistanceMeters } from '@/utils/location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase, parseFunctionError } from '@/lib/supabase';
 import { getGridId } from '@/lib/grid';
+import { globalShowError } from '@/providers/GlobalErrorProvider';
 
 export type ObservationState =
   | 'IDLE'
@@ -176,9 +180,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         set({ observations: data || [], heatmapState: 'SUCCESS' });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       console.warn('Failed to fetch observations from Supabase:', err);
-      set({ heatmapState: 'ERROR', heatmapError: msg });
+      set({ heatmapState: 'ERROR', heatmapError: null });
+      globalShowError({ error: err });
     }
     console.log('[13] Fetch Observations Finished');
   },
@@ -211,13 +215,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
         loc = await get().startGpsAcquisition();
       }
 
-      if (!loc) {
-        set({
-          observationState: 'FAILED',
-          locationError: 'GPS acquisition failed. Please enable location permissions.',
-        });
-        return false;
-      }
+        if (!loc) {
+          set({
+            observationState: 'FAILED',
+            locationError: 'GPS acquisition failed. Please enable location permissions.',
+          });
+          return false;
+        }
 
       // 2. Validate coordinates
       set({
@@ -237,10 +241,56 @@ export const useAppStore = create<AppStore>((set, get) => ({
         return false;
       }
 
-      // 3. Upload
+      // Rule 2 Check: If accuracy is > 100m, we should delay and ask for a better location
+      if (loc.coords.accuracy && loc.coords.accuracy > 100) {
+        set({
+          observationState: 'FAILED',
+          locationError: 'GPS accuracy is too poor. Please move to an open area and try again.',
+        });
+        return false;
+      }
+
+      // 3. Upload State starts immediately
       set({
         observationState: 'UPLOAD',
       });
+
+      // Rule 5: Location Stability (Async Jitter check, max 2.5s)
+      let highJitter = false;
+      let maxDrift = 0;
+      let subscription: Location.LocationSubscription | null = null;
+      
+      // Skip extended sampling if accuracy is already excellent
+      if (!loc.coords.accuracy || loc.coords.accuracy >= 10) {
+        subscription = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.Highest, timeInterval: 500, distanceInterval: 1 },
+          (newLoc) => {
+            const drift = getDistanceMeters(
+              { latitude: loc!.coords.latitude, longitude: loc!.coords.longitude },
+              { latitude: newLoc.coords.latitude, longitude: newLoc.coords.longitude }
+            );
+            if (drift > maxDrift) maxDrift = drift;
+          }
+        );
+        // Wait maximum 2.5 seconds to collect stability data
+        await new Promise(resolve => setTimeout(resolve, 2500));
+        subscription.remove();
+        if (maxDrift > 100) highJitter = true;
+      }
+
+      // Get Device ID for abuse detection (fallback to AsyncStorage)
+      let deviceId = 'unknown';
+      try {
+        const storedId = await AsyncStorage.getItem('mbg_device_id');
+        if (storedId) {
+          deviceId = storedId;
+        } else {
+          deviceId = 'device_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+          await AsyncStorage.setItem('mbg_device_id', deviceId);
+        }
+      } catch (e) {
+        console.warn('Failed to get device ID', e);
+      }
 
       const { data, error } = await supabase.functions.invoke(
         'submit-observation',
@@ -248,16 +298,37 @@ export const useAppStore = create<AppStore>((set, get) => ({
           body: {
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
+            accuracy: loc.coords.accuracy || null,
+            speed: loc.coords.speed || null,
+            isMocked: loc.mocked || false,
+            isEmulator: !Device.isDevice,
+            highJitter: highJitter,
+            deviceId: deviceId,
+            isDev: __DEV__,
           },
         }
       );
 
-      if (error) {
-        const parsed = await parseFunctionError(error, 'submit-observation');
+      if (data && data.trustWarning) {
         set({
           observationState: 'FAILED',
-          locationError: parsed.message,
+          locationError: "We couldn't confidently verify your location. Please move to an open area and try again.",
         });
+        return false;
+      }
+
+      if (error) {
+        const parsed = await parseFunctionError(error, 'submit-observation');
+        
+        if (parsed.code === 'SERVER_ERROR' || !parsed.code) {
+          set({ observationState: 'IDLE', locationError: null });
+          globalShowError({ error });
+        } else {
+          set({
+            observationState: 'FAILED',
+            locationError: parsed.message,
+          });
+        }
 
         if (error.status === 409 || (error.context && error.context.status === 409)) {
           const { gridId } = getGridId(loc.coords.latitude, loc.coords.longitude);
@@ -288,10 +359,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
       console.error(err);
 
       const parsed = await parseFunctionError(err, 'submit-observation');
-      set({
-        observationState: 'FAILED',
-        locationError: parsed.message,
-      });
+      if (parsed.code === 'SERVER_ERROR' || !parsed.code) {
+        set({ observationState: 'IDLE', locationError: null });
+        globalShowError({ error: err });
+      } else {
+        set({
+          observationState: 'FAILED',
+          locationError: parsed.message,
+        });
+      }
 
       return false;
     }
@@ -319,8 +395,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         if (err.status === 409 || (err.context && err.context.status === 409)) {
           await get().addCleanVoteCooldown(gridId);
         }
+        if (parsed.code === 'SERVER_ERROR') {
+          globalShowError({ error: err });
+        }
         throw new Error(parsed.message);
       }
+      globalShowError({ error: err });
       throw err;
     }
   },

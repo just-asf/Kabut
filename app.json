@@ -22,7 +22,8 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.kko1.kabut"
     },
     "web": {
       "favicon": "./assets/images/favicon.png"
@@ -32,6 +33,12 @@
       "expo-web-browser",
       "expo-font",
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f090d1f2-9b5b-4d4c-91da-a7e803face38"
+      }
+    }
   }
 }
